@@ -1469,7 +1469,7 @@ export default function RezoApp() {
       try {
         const chatRes = await window.storage.get(`chat:${meetup.id}`, true).catch(() => null);
         const chatList = chatRes && chatRes.value ? JSON.parse(chatRes.value) : [];
-        const systemMsg = { id: uid(), author: 'REZO', text: `📍 ${name} est arrivé·e sur place.`, sentAt: new Date().toISOString(), system: true };
+        const systemMsg = { id: uid(), author: 'REZO', text: `📍 ${name} est arrivé·e sur place.`, sentAt: new Date().toISOString(), system: true, arrivalOf: name };
         await window.storage.set(`chat:${meetup.id}`, JSON.stringify([...(Array.isArray(chatList) ? chatList : []), systemMsg]), true);
       } catch (err) {
         // notification chat manquée, l'arrivée reste enregistrée
@@ -1478,6 +1478,36 @@ export default function RezoApp() {
       others.forEach((p) => notifyByName(p, 'Quelqu’un est arrivé', `📍 ${name} est arrivé·e à "${meetup.title}"`, '/'));
     } catch (err) {
       showToast("Impossible d'enregistrer ton arrivée, réessaie.");
+    }
+  };
+
+  // Permet de se rétracter après une confirmation d'arrivée par erreur : retire l'entrée de "Déjà
+  // sur place", le message système correspondant dans le chat, et repasse en "pas encore arrivé·e"
+  // pour pouvoir relancer un trajet ou reconfirmer plus tard.
+  const cancelArrival = async (meetup, name) => {
+    try {
+      const res = await window.storage.get('meetups-list', true).catch(() => null);
+      const current = res && res.value ? JSON.parse(res.value) : meetups;
+      const updated = current.map((m) => {
+        if (m.id !== meetup.id) return m;
+        const arrivals = { ...(m.arrivals || {}) };
+        delete arrivals[name];
+        return { ...m, arrivals };
+      });
+      await saveMeetups(updated);
+      try {
+        const chatRes = await window.storage.get(`chat:${meetup.id}`, true).catch(() => null);
+        const chatList = chatRes && chatRes.value ? JSON.parse(chatRes.value) : [];
+        const filteredChat = (Array.isArray(chatList) ? chatList : []).filter(
+          (msg) => !(msg.system && msg.arrivalOf === name)
+        );
+        await window.storage.set(`chat:${meetup.id}`, JSON.stringify(filteredChat), true);
+      } catch (err) {
+        // message de chat non retiré, l'annulation de l'arrivée reste effective
+      }
+      showToast('Arrivée annulée.');
+    } catch (err) {
+      showToast("Impossible d'annuler ton arrivée, réessaie.");
     }
   };
 
@@ -1957,24 +1987,37 @@ export default function RezoApp() {
                 Noter
               </button>
             )}
-            <button
-              className={`join-btn ${
-                isFull || genderBlocked ? 'full' : isIn ? 'leave' : isPending ? 'pending' : 'join'
-              }`}
-              disabled={isFull || genderBlocked}
-              title={genderBlocked ? `Réservé ${audience === 'femmes' ? 'aux femmes' : 'aux hommes'}` : undefined}
-              onClick={() => requestOrLeave(m)}
-            >
-              {isIn
-                ? 'Quitter'
-                : isPending
-                ? 'Annuler la demande'
-                : isFull
-                ? 'Complet'
-                : genderBlocked
-                ? 'Non éligible'
-                : 'Demander à rejoindre'}
-            </button>
+            {/* L'organisateur ne "quitte" pas sa propre rencontre : modifier/supprimer suffisent
+                avant le démarrage, et une fois démarrée il la termine plutôt (voir ci-dessous). */}
+            {isHost && m.started && !m.closed && !past && (
+              <button
+                className="join-btn leave"
+                title="Clôturer la rencontre pour tout le monde"
+                onClick={() => setOngoingCheckMeetup(m)}
+              >
+                Terminer la rencontre
+              </button>
+            )}
+            {!isHost && (
+              <button
+                className={`join-btn ${
+                  isFull || genderBlocked ? 'full' : isIn ? 'leave' : isPending ? 'pending' : 'join'
+                }`}
+                disabled={isFull || genderBlocked}
+                title={genderBlocked ? `Réservé ${audience === 'femmes' ? 'aux femmes' : 'aux hommes'}` : undefined}
+                onClick={() => requestOrLeave(m)}
+              >
+                {isIn
+                  ? 'Quitter'
+                  : isPending
+                  ? 'Annuler la demande'
+                  : isFull
+                  ? 'Complet'
+                  : genderBlocked
+                  ? 'Non éligible'
+                  : 'Demander à rejoindre'}
+              </button>
+            )}
           </div>
         </div>
         </div>
@@ -2777,9 +2820,15 @@ export default function RezoApp() {
           border-radius: 10px; padding: 9px;
         }
         .journey-arrived {
-          display: flex; align-items: center; gap: 8px; justify-content: center;
+          display: flex; flex-direction: column; align-items: center; gap: 6px;
           font-size: 12.5px; color: var(--muted);
         }
+        .journey-arrived-row { display: flex; align-items: center; gap: 8px; justify-content: center; }
+        .journey-cancel-link {
+          background: none; border: none; color: var(--muted); font-size: 11.5px;
+          text-decoration: underline; cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .journey-cancel-link:hover { color: var(--text); }
         .journey-manual-btn {
           background: none; border: none; color: var(--muted); font-size: 12px;
           text-decoration: underline; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center;
@@ -3682,7 +3731,9 @@ export default function RezoApp() {
               <button className="modal-close" onClick={() => setOngoingCheckMeetup(null)}><X size={18} /></button>
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
-              Elle a débuté il y a plus de 30 minutes. Dis-nous où ça en est pour prévenir les participants.
+              {meetupCheckinDueAt(ongoingCheckMeetup) !== null && now >= meetupCheckinDueAt(ongoingCheckMeetup)
+                ? 'Elle a débuté il y a plus de 30 minutes. Dis-nous où ça en est pour prévenir les participants.'
+                : 'Confirme pour prévenir les participants — cela déclenchera leur invitation à laisser un avis.'}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -3740,11 +3791,19 @@ export default function RezoApp() {
 
             {userName && journeyMeetup.arrivals && journeyMeetup.arrivals[userName] ? (
               <div className="journey-arrived">
-                <span className="live-status-chip arrived">Arrivé·e</span>
-                <span>
-                  Confirmé à{' '}
-                  {new Date(journeyMeetup.arrivals[userName]).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                </span>
+                <div className="journey-arrived-row">
+                  <span className="live-status-chip arrived">Arrivé·e</span>
+                  <span>
+                    Confirmé à{' '}
+                    {new Date(journeyMeetup.arrivals[userName]).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <button
+                  className="journey-cancel-link"
+                  onClick={() => cancelArrival(journeyMeetup, userName)}
+                >
+                  Annuler mon arrivée
+                </button>
               </div>
             ) : (
               <>
