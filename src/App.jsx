@@ -1,27 +1,56 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   MapPin, Users, Clock, Plus, X, Radio, Check, Loader2, Navigation, Crosshair, Pencil, MessageCircle, Send,
-  Settings, Flag, SlidersHorizontal, Dumbbell, Palette, Music, Gamepad2, HeartPulse, UtensilsCrossed, Sparkles, LayoutGrid,
-  UserPlus, Copy, Share2, Star, ExternalLink,
+  Flag, SlidersHorizontal, Dumbbell, Palette, Music, Gamepad2, HeartPulse, UtensilsCrossed, Sparkles, Search,
+  UserPlus, Copy, Share2, Star, ExternalLink, Home, Bookmark, Compass, User, Mail, Lock, LogOut, Eye, EyeOff,
+  Trash2, Type as TypeIcon, AlignLeft, Heart, Activity, Mountain, Film, Plane, Camera, BookOpen, Cpu, Briefcase,
+  Languages, PawPrint, Baby, Cake, Bell, BellOff, Flame, Award, ShieldCheck, Phone,
 } from 'lucide-react';
+import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscribeFromPush, notifyByName } from './lib/push.js';
+import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
 
+// Large éventail d'activités pour toucher un public international aux intérêts variés
+// (inspiré des catégories des grandes apps de meetup) tout en restant scannable dans une seule
+// rangée d'icônes horizontale.
 const ACTIVITIES = [
   { id: 'sport', label: 'Sport', color: '#F2A65A' },
+  { id: 'fitness', label: 'Fitness', color: '#64B5F6' },
+  { id: 'randonnee', label: 'Plein air', color: '#8BC34A' },
   { id: 'culture', label: 'Culture', color: '#B08CE0' },
   { id: 'musique', label: 'Musique', color: '#EF7A9B' },
+  { id: 'cinema', label: 'Cinéma', color: '#7986CB' },
   { id: 'jeux', label: 'Jeux', color: '#4FD1C5' },
   { id: 'bienetre', label: 'Bien-être', color: '#7FCF9E' },
   { id: 'food', label: 'Food & Boissons', color: '#E8674F' },
+  { id: 'voyage', label: 'Voyage', color: '#4DB6E5' },
+  { id: 'photo', label: 'Photo', color: '#90A4AE' },
+  { id: 'lecture', label: 'Lecture', color: '#D4A574' },
+  { id: 'tech', label: 'Tech', color: '#7C93F7' },
+  { id: 'business', label: 'Business', color: '#64748B' },
+  { id: 'langues', label: 'Langues', color: '#26A69A' },
+  { id: 'animaux', label: 'Animaux', color: '#A67C52' },
+  { id: 'famille', label: 'Famille', color: '#FF8FA3' },
   { id: 'autre', label: 'Autre', color: '#9AA0B4' },
 ];
 
 const ACTIVITY_ICONS = {
   sport: Dumbbell,
+  fitness: Activity,
+  randonnee: Mountain,
   culture: Palette,
   musique: Music,
+  cinema: Film,
   jeux: Gamepad2,
   bienetre: HeartPulse,
   food: UtensilsCrossed,
+  voyage: Plane,
+  photo: Camera,
+  lecture: BookOpen,
+  tech: Cpu,
+  business: Briefcase,
+  langues: Languages,
+  animaux: PawPrint,
+  famille: Baby,
   autre: Sparkles,
 };
 
@@ -31,6 +60,65 @@ const MOROCCO_PRESETS = [
   { label: 'Casablanca centre', coords: { lat: 33.5731, lng: -7.5898 } },
   { label: 'Rabat', coords: { lat: 34.0209, lng: -6.8416 } },
   { label: 'Marrakech', coords: { lat: 31.6295, lng: -7.9811 } },
+];
+
+// Formate un objet Date en valeur compatible avec <input type="datetime-local">, en heure locale
+// (surtout ne pas utiliser toISOString ici, qui est en UTC et décalerait l'heure affichée).
+function toDatetimeLocalValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// Prochaine occurrence d'un jour de semaine (0 = dimanche) à une heure donnée, toujours dans le
+// futur (si "aujourd'hui" correspond mais que l'heure est déjà passée, bascule à la semaine suivante).
+function nextWeekday(targetDay, hour, minute = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + ((targetDay - d.getDay() + 7) % 7));
+  d.setHours(hour, minute, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
+  return d;
+}
+
+// Templates "un tap" affichés quand le flux est vide : réduire la friction de création à zéro
+// plutôt que de laisser un état vide passif ("sois le premier").
+const QUICK_TEMPLATES = [
+  {
+    id: 'foot-soir',
+    emoji: '⚽',
+    label: 'Foot ce soir',
+    activity: 'sport',
+    title: 'Foot 5 vs 5 ce soir',
+    note: 'Niveau détente, tout le monde est bienvenu.',
+    when: () => {
+      const d = new Date();
+      d.setHours(19, 0, 0, 0);
+      if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+      return d;
+    },
+  },
+  {
+    id: 'cafe-weekend',
+    emoji: '☕',
+    label: 'Café ce weekend',
+    activity: 'food',
+    title: 'Café entre nouveaux arrivants',
+    note: 'Discussion informelle autour d’un café, aucune expérience requise.',
+    when: () => nextWeekday(6, 11),
+  },
+  {
+    id: 'jeux-soiree',
+    emoji: '🎲',
+    label: 'Soirée jeux',
+    activity: 'jeux',
+    title: 'Soirée jeux de société',
+    note: 'Ramène ton jeu préféré si tu en as un !',
+    when: () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 2);
+      d.setHours(19, 30, 0, 0);
+      return d;
+    },
+  },
 ];
 
 const GENDER_OPTIONS = [
@@ -45,6 +133,8 @@ const AUDIENCE_OPTIONS = [
   { id: 'hommes', label: '100% Hommes', short: '100% Hommes' },
 ];
 
+const BADGE_THRESHOLD = 3;
+
 const REPORT_REASONS = [
   'Spam ou publicité',
   'Contenu inapproprié',
@@ -55,6 +145,51 @@ const REPORT_REASONS = [
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+const ACCOUNTS_KEY = 'accounts';
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+// Hash côté client (Web Crypto) : évite de stocker le mot de passe en clair dans le
+// registre de comptes partagé. Ce n'est pas un substitut à une vraie authentification
+// serveur (voir storagePolyfill.js), mais c'est raisonnable pour ce prototype local.
+async function hashPassword(password) {
+  const bytes = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// Vrai si l'erreur vient d'un `fetch` qui n'a pas pu joindre le serveur (backend arrêté,
+// mauvaise URL…), par opposition à une réponse HTTP normale (ex: 404 = clé absente).
+function isNetworkError(err) {
+  return err instanceof TypeError && /fetch|network/i.test(err.message || '');
+}
+
+const SERVER_UNREACHABLE_MESSAGE =
+  "Impossible de joindre le serveur partagé. Vérifie qu'il tourne (npm run server, ou npm run dev qui lance les deux) puis réessaie.";
+
+async function loadAccounts() {
+  try {
+    const res = await window.storage.get(ACCOUNTS_KEY, true);
+    const map = res && res.value ? JSON.parse(res.value) : {};
+    return map && typeof map === 'object' ? map : {};
+  } catch (err) {
+    // "Key not found" = pas encore de compte créé, c'est normal. Toute autre erreur
+    // (serveur injoignable, etc.) doit remonter pour que l'appelant puisse la signaler.
+    if (err && typeof err.message === 'string' && err.message.startsWith('Key not found')) {
+      return {};
+    }
+    throw err;
+  }
+}
+
+async function saveAccounts(accounts) {
+  await window.storage.set(ACCOUNTS_KEY, JSON.stringify(accounts), true);
 }
 
 function formatWhen(iso) {
@@ -96,6 +231,15 @@ function formatDistance(km) {
   if (km === null || km === undefined) return null;
   if (km < 1) return `${Math.round(km * 1000)} m`;
   return `${km.toFixed(km < 10 ? 1 : 0)} km`;
+}
+
+// Libellé lisible pour la tranche d'âge ciblée par une rencontre.
+function formatAgeRange(min, max) {
+  const lo = min || 18;
+  const hi = max || 99;
+  if (lo <= 18 && hi >= 99) return 'Tous âges';
+  if (hi >= 99) return `${lo} ans et +`;
+  return `${lo}-${hi} ans`;
 }
 
 // Construit un lien Google Maps pour une rencontre : coordonnées GPS si disponibles,
@@ -154,8 +298,9 @@ function Avatar({ name, avatarUrl, size = 22 }) {
           height: size,
           borderRadius: '50%',
           objectFit: 'cover',
-          border: '2px solid #1C1F29',
+          border: '2px solid var(--card)',
           flexShrink: 0,
+          display: 'block',
         }}
       />
     );
@@ -177,6 +322,16 @@ function StarDisplay({ value, count, size = 12 }) {
       <span className="star-display-value">{value.toFixed(1)}</span>
       <span className="star-display-count">({count})</span>
     </span>
+  );
+}
+
+// Libellé de champ avec petite icône contextuelle, pour guider visuellement chaque étape des formulaires.
+function FieldLabel({ icon: Icon, children }) {
+  return (
+    <label>
+      {Icon && <Icon size={12} style={{ verticalAlign: '-2px', marginRight: 5, opacity: 0.75 }} />}
+      {children}
+    </label>
   );
 }
 
@@ -202,15 +357,39 @@ function StarPicker({ value, onChange, size = 22 }) {
 export default function RezoApp() {
   const [meetups, setMeetups] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashHiding, setSplashHiding] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [zoneQuery, setZoneQuery] = useState('');
+  const [activityQuery, setActivityQuery] = useState('');
+  const [activitySuggestOpen, setActivitySuggestOpen] = useState(false);
   const [selectedActivity, setSelectedActivity] = useState('all');
   const [selectedAudience, setSelectedAudience] = useState('all');
+  const [ageFilterMin, setAgeFilterMin] = useState(16);
+  const [ageFilterMax, setAgeFilterMax] = useState(99);
   const [userName, setUserName] = useState(null);
   const [userGender, setUserGender] = useState(null);
   const [userPreferences, setUserPreferences] = useState([]);
   const [userAvatar, setUserAvatar] = useState(null);
+  const [userPhone, setUserPhone] = useState(null);
+  const [userPhoneVerified, setUserPhoneVerified] = useState(false);
+  const [userEmail, setUserEmail] = useState(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('signup'); // 'signup' | 'login'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirm, setAuthConfirm] = useState('');
+  const [authShowPassword, setAuthShowPassword] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [profilesMap, setProfilesMap] = useState({});
+  const [verifiedMap, setVerifiedMap] = useState({});
+  const [phoneDraft, setPhoneDraft] = useState('');
+  const [phoneVerifiedDraft, setPhoneVerifiedDraft] = useState(false);
+  const [verifyCodeSent, setVerifyCodeSent] = useState(false);
+  const [verifyDevCode, setVerifyDevCode] = useState(null);
+  const [verifyCodeInput, setVerifyCodeInput] = useState('');
+  const [verifyBusy, setVerifyBusy] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [genderDraft, setGenderDraft] = useState('');
@@ -245,6 +424,9 @@ export default function RezoApp() {
   const arrivalsSeenRef = useRef({});
   const arrivalsInitRef = useRef(false);
   const [editingMeetup, setEditingMeetup] = useState(null);
+  const [templateDraft, setTemplateDraft] = useState(null);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const [chatMeetup, setChatMeetup] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatLoading, setChatLoading] = useState(false);
@@ -257,6 +439,16 @@ export default function RezoApp() {
     setToast(msg);
     setTimeout(() => setToast(null), 2600);
   };
+
+  // Écran de démarrage animé, affiché à chaque lancement de l'app avant de révéler le contenu.
+  useEffect(() => {
+    const hideTimer = setTimeout(() => setSplashHiding(true), 1500);
+    const removeTimer = setTimeout(() => setShowSplash(false), 1900);
+    return () => {
+      clearTimeout(hideTimer);
+      clearTimeout(removeTimer);
+    };
+  }, []);
 
   const loadMeetups = useCallback(async (silent) => {
     try {
@@ -297,15 +489,29 @@ export default function RezoApp() {
     }
   }, []);
 
+  // Nom -> vérifié (numéro de téléphone confirmé), registre partagé alimenté par le flux de
+  // vérification (voir confirmPhoneVerification). Chargé comme profilesMap, même logique.
+  const loadVerified = useCallback(async (silent) => {
+    try {
+      const res = await window.storage.get('verified-map', true);
+      const map = res && res.value ? JSON.parse(res.value) : {};
+      setVerifiedMap(map && typeof map === 'object' ? map : {});
+    } catch (err) {
+      if (!silent) setVerifiedMap({});
+    }
+  }, []);
+
   useEffect(() => {
     loadMeetups(false);
     loadProfiles(false);
+    loadVerified(false);
     const interval = setInterval(() => {
       if (!savingRef.current) loadMeetups(true);
       loadProfiles(true);
+      loadVerified(true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadMeetups, loadProfiles]);
+  }, [loadMeetups, loadProfiles, loadVerified]);
 
   // Détecte les nouvelles arrivées à chaque rafraîchissement et notifie les membres concernés
   // (pas de partage de position continue : uniquement l'événement "est arrivé·e").
@@ -329,6 +535,12 @@ export default function RezoApp() {
 
   useEffect(() => {
     (async () => {
+      try {
+        const res = await window.storage.get('rezo-email', false);
+        if (res && res.value) setUserEmail(res.value);
+      } catch (err) {
+        // no session yet
+      }
       try {
         const res = await window.storage.get('rezo-username', false);
         if (res && res.value) setUserName(res.value);
@@ -354,6 +566,18 @@ export default function RezoApp() {
         // no avatar stored yet
       }
       try {
+        const res = await window.storage.get('rezo-phone', false);
+        if (res && res.value) setUserPhone(res.value);
+      } catch (err) {
+        // no phone stored yet
+      }
+      try {
+        const res = await window.storage.get('rezo-phone-verified', false);
+        if (res && res.value === 'true') setUserPhoneVerified(true);
+      } catch (err) {
+        // not verified yet
+      }
+      try {
         const res = await window.storage.get('rezo-coords', false);
         if (res && res.value) setUserCoords(JSON.parse(res.value));
       } catch (err) {
@@ -361,6 +585,64 @@ export default function RezoApp() {
       }
     })();
   }, []);
+
+  // Reflète l'état réel de l'abonnement push de CET appareil (un abonnement est par
+  // navigateur/appareil, pas par compte), pour que le bouton affiche le bon état au chargement.
+  useEffect(() => {
+    getExistingPushSubscription().then((sub) => setPushEnabled(!!sub));
+  }, []);
+
+  const togglePush = () => {
+    if (!userEmail) return;
+    setPushBusy(true);
+    if (pushEnabled) {
+      unsubscribeFromPush(userEmail)
+        .then(() => {
+          setPushEnabled(false);
+          showToast('Notifications désactivées.');
+        })
+        .catch(() => showToast('Impossible de désactiver les notifications.'))
+        .finally(() => setPushBusy(false));
+    } else {
+      subscribeToPush(userEmail)
+        .then(() => {
+          setPushEnabled(true);
+          showToast('Notifications activées !');
+        })
+        .catch((err) => showToast(err.message || 'Impossible d’activer les notifications.'))
+        .finally(() => setPushBusy(false));
+    }
+  };
+
+  // Gamification légère : nombre de rencontres (organisées ou rejointes) ce mois-ci civil.
+  // Une raison de revenir même sans notification.
+  const monthlyCount = userName
+    ? meetups.filter((m) => {
+        if (!(m.host === userName || m.participants.includes(userName))) return false;
+        const d = new Date(m.datetime);
+        const now = new Date();
+        return !isNaN(d.getTime()) && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+      }).length
+    : 0;
+  const badgeUnlocked = monthlyCount >= BADGE_THRESHOLD;
+
+  // Célèbre le badge une seule fois par mois civil (persisté localement pour survivre à un
+  // rechargement de page), au moment où le seuil est franchi.
+  useEffect(() => {
+    if (!badgeUnlocked || !userName) return;
+    const monthKey = `rezo-badge-seen-${new Date().getFullYear()}-${new Date().getMonth()}`;
+    (async () => {
+      try {
+        const res = await window.storage.get(monthKey, false).catch(() => null);
+        if (res && res.value) return;
+        await window.storage.set(monthKey, 'true', false);
+        showToast(`🏅 Badge débloqué : ${BADGE_THRESHOLD} rencontres ce mois-ci !`);
+      } catch (err) {
+        // best effort
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [badgeUnlocked, userName]);
 
   const applyManualCoords = async (coords) => {
     if (!coords || isNaN(coords.lat) || isNaN(coords.lng)) {
@@ -408,17 +690,184 @@ export default function RezoApp() {
     );
   };
 
+  const disableLocation = async () => {
+    setUserCoords(null);
+    setLocationError(null);
+    try {
+      await window.storage.delete('rezo-coords', false).catch(() => {});
+    } catch (err) {
+      // best effort
+    }
+    showToast('Position désactivée.');
+  };
+
+  const resetPhoneVerifyUi = () => {
+    setVerifyCodeSent(false);
+    setVerifyDevCode(null);
+    setVerifyCodeInput('');
+  };
+
+  const openProfile = () => {
+    if (userEmail && userName && userGender && userPreferences.length > 0) {
+      setPendingAction(null);
+      setNameDraft(userName);
+      setGenderDraft(userGender);
+      setPreferencesDraft(userPreferences);
+      setAvatarDraft(null);
+      setPhoneDraft(userPhone || '');
+      setPhoneVerifiedDraft(userPhoneVerified);
+      resetPhoneVerifyUi();
+      setShowNameModal(true);
+    } else {
+      requireName(() => {});
+    }
+  };
+
+  // Porte d'entrée avant toute action nécessitant une identité : d'abord un compte
+  // (e-mail + mot de passe), puis obligatoirement le profil (prénom, sexe, activités).
   const requireName = (action) => {
-    if (userName && userGender && userPreferences.length > 0) {
+    if (userEmail && userName && userGender && userPreferences.length > 0) {
       action(userName, userGender);
       return;
     }
     setPendingAction(() => action);
+    if (!userEmail) {
+      setAuthMode('signup');
+      setAuthEmail('');
+      setAuthPassword('');
+      setAuthConfirm('');
+      setAuthShowPassword(false);
+      setAuthError(null);
+      setShowAuthModal(true);
+      return;
+    }
     setNameDraft(userName || '');
     setGenderDraft(userGender || '');
     setPreferencesDraft(userPreferences.length > 0 ? userPreferences : []);
     setAvatarDraft(null);
+    setPhoneDraft(userPhone || '');
+    setPhoneVerifiedDraft(userPhoneVerified);
+    resetPhoneVerifyUi();
     setShowNameModal(true);
+  };
+
+  const submitSignup = async () => {
+    const email = authEmail.trim().toLowerCase();
+    if (!isValidEmail(email)) {
+      setAuthError('Adresse e-mail invalide.');
+      return;
+    }
+    if (authPassword.length < 6) {
+      setAuthError('Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
+    if (authPassword !== authConfirm) {
+      setAuthError('Les mots de passe ne correspondent pas.');
+      return;
+    }
+    setAuthSubmitting(true);
+    setAuthError(null);
+    try {
+      const accounts = await loadAccounts();
+      if (accounts[email]) {
+        setAuthError('Un compte existe déjà avec cette adresse.');
+        setAuthMode('login');
+        return;
+      }
+      const passwordHash = await hashPassword(authPassword);
+      accounts[email] = { passwordHash, createdAt: new Date().toISOString() };
+      await saveAccounts(accounts);
+      await window.storage.set('rezo-email', email, false);
+      setUserEmail(email);
+      setShowAuthModal(false);
+      setNameDraft('');
+      setGenderDraft('');
+      setPreferencesDraft([]);
+      setAvatarDraft(null);
+      setPhoneDraft('');
+      setPhoneVerifiedDraft(false);
+      resetPhoneVerifyUi();
+      setShowNameModal(true);
+    } catch (err) {
+      setAuthError(isNetworkError(err) ? SERVER_UNREACHABLE_MESSAGE : 'Erreur lors de la création du compte, réessaie.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const submitLogin = async () => {
+    const email = authEmail.trim().toLowerCase();
+    if (!email || !authPassword) {
+      setAuthError('Renseigne ton e-mail et ton mot de passe.');
+      return;
+    }
+    setAuthSubmitting(true);
+    setAuthError(null);
+    try {
+      const accounts = await loadAccounts();
+      const account = accounts[email];
+      if (!account) {
+        setAuthError('Aucun compte avec cette adresse. Crée-en un.');
+        setAuthMode('signup');
+        return;
+      }
+      const passwordHash = await hashPassword(authPassword);
+      if (passwordHash !== account.passwordHash) {
+        setAuthError('Mot de passe incorrect.');
+        return;
+      }
+      const name = account.name || '';
+      const gender = account.gender || '';
+      const preferences = account.preferences || [];
+      const avatar = account.avatar || null;
+      const phone = account.phone || null;
+      const phoneVerified = !!account.phoneVerified;
+      await window.storage.set('rezo-email', email, false);
+      if (name) await window.storage.set('rezo-username', name, false);
+      if (gender) await window.storage.set('rezo-gender', gender, false);
+      if (preferences.length) await window.storage.set('rezo-preferences', JSON.stringify(preferences), false);
+      if (avatar) await window.storage.set('rezo-avatar', avatar, false);
+      if (phone) await window.storage.set('rezo-phone', phone, false);
+      await window.storage.set('rezo-phone-verified', phoneVerified ? 'true' : 'false', false);
+      setUserEmail(email);
+      setUserName(name || null);
+      setUserGender(gender || null);
+      setUserPreferences(preferences);
+      setUserAvatar(avatar);
+      setUserPhone(phone);
+      setUserPhoneVerified(phoneVerified);
+      setShowAuthModal(false);
+      setNameDraft(name);
+      setGenderDraft(gender);
+      setPreferencesDraft(preferences);
+      setAvatarDraft(null);
+      setPhoneDraft(phone || '');
+      setPhoneVerifiedDraft(phoneVerified);
+      resetPhoneVerifyUi();
+      setShowNameModal(true);
+    } catch (err) {
+      setAuthError(isNetworkError(err) ? SERVER_UNREACHABLE_MESSAGE : 'Erreur de connexion, réessaie.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await window.storage.delete('rezo-email', false).catch(() => {});
+    } catch (err) {
+      // best effort
+    }
+    setUserEmail(null);
+    setUserName(null);
+    setUserGender(null);
+    setUserPreferences([]);
+    setUserAvatar(null);
+    setUserPhone(null);
+    setUserPhoneVerified(false);
+    setShowNameModal(false);
+    setPendingAction(null);
+    showToast('Déconnecté·e.');
   };
 
   const togglePreference = (id) => {
@@ -459,6 +908,30 @@ export default function RezoApp() {
         await window.storage.set('profiles', JSON.stringify(nextProfiles), true);
         setProfilesMap(nextProfiles);
       }
+      await window.storage.set('rezo-phone', phoneDraft.trim(), false);
+      await window.storage.set('rezo-phone-verified', phoneVerifiedDraft ? 'true' : 'false', false);
+      if (userEmail) {
+        const accounts = await loadAccounts();
+        accounts[userEmail] = {
+          ...(accounts[userEmail] || {}),
+          name: trimmed,
+          gender: genderDraft,
+          preferences: preferencesDraft,
+          avatar: finalAvatar || null,
+          phone: phoneDraft.trim() || null,
+          phoneVerified: phoneVerifiedDraft,
+          updatedAt: new Date().toISOString(),
+        };
+        await saveAccounts(accounts);
+      }
+      // Registre partagé "nom -> vérifié", pour afficher le badge sur les cartes sans exposer
+      // le numéro lui-même à personne d'autre que son propriétaire.
+      const verifiedRes = await window.storage.get('verified-map', true).catch(() => null);
+      const nextVerifiedMap = verifiedRes && verifiedRes.value ? JSON.parse(verifiedRes.value) : {};
+      if (phoneVerifiedDraft) nextVerifiedMap[trimmed] = true;
+      else delete nextVerifiedMap[trimmed];
+      await window.storage.set('verified-map', JSON.stringify(nextVerifiedMap), true);
+      setVerifiedMap(nextVerifiedMap);
     } catch (err) {
       // continue even if persistence fails
     }
@@ -466,11 +939,55 @@ export default function RezoApp() {
     setUserGender(genderDraft);
     setUserPreferences(preferencesDraft);
     setUserAvatar(finalAvatar);
+    setUserPhone(phoneDraft.trim() || null);
+    setUserPhoneVerified(phoneVerifiedDraft);
     setAvatarDraft(null);
     setShowNameModal(false);
     if (pendingAction) {
       pendingAction(trimmed, genderDraft);
       setPendingAction(null);
+    }
+  };
+
+  const onPhoneDraftChange = (value) => {
+    setPhoneDraft(value);
+    if (value.trim() !== (userPhone || '')) setPhoneVerifiedDraft(false); // nouveau numéro = à re-vérifier
+    resetPhoneVerifyUi();
+  };
+
+  const requestPhoneVerification = async () => {
+    const phone = phoneDraft.trim();
+    if (!phone) {
+      showToast('Renseigne un numéro de téléphone.');
+      return;
+    }
+    setVerifyBusy(true);
+    try {
+      const { devCode } = await requestPhoneCode(userEmail, phone);
+      setVerifyCodeSent(true);
+      setVerifyDevCode(devCode);
+      setVerifyCodeInput('');
+    } catch (err) {
+      showToast(err.message || 'Impossible d’envoyer le code.');
+    } finally {
+      setVerifyBusy(false);
+    }
+  };
+
+  const confirmPhoneVerification = async () => {
+    const phone = phoneDraft.trim();
+    const code = verifyCodeInput.trim();
+    if (!code) return;
+    setVerifyBusy(true);
+    try {
+      await confirmPhoneCode(userEmail, phone, code);
+      setPhoneVerifiedDraft(true);
+      resetPhoneVerifyUi();
+      showToast('Numéro vérifié !');
+    } catch (err) {
+      showToast(err.message || 'Code incorrect.');
+    } finally {
+      setVerifyBusy(false);
     }
   };
 
@@ -495,6 +1012,8 @@ export default function RezoApp() {
                 maxParticipants: Number(form.maxParticipants) || 8,
                 note: form.note.trim(),
                 audience,
+                ageMin: Number(form.ageMin) || 18,
+                ageMax: Number(form.ageMax) || 99,
                 coords: form.useLocation && userCoords ? userCoords : m.coords,
               }
             : m
@@ -518,6 +1037,8 @@ export default function RezoApp() {
         host: name,
         hostGender: gender,
         audience,
+        ageMin: Number(form.ageMin) || 18,
+        ageMax: Number(form.ageMax) || 99,
         participants: [name],
         participantGenders: { [name]: gender },
         pendingRequests: [],
@@ -527,6 +1048,7 @@ export default function RezoApp() {
       const updated = [newMeetup, ...meetups];
       await saveMeetups(updated);
       setShowCreate(false);
+      setTemplateDraft(null);
       showToast('Rencontre créée !');
     });
   };
@@ -587,6 +1109,12 @@ export default function RezoApp() {
       );
       await saveMeetups(updated);
       showToast("Demande envoyée à l'organisateur.");
+      notifyByName(
+        meetup.host,
+        'Nouvelle demande',
+        `${name} veut rejoindre "${meetup.title}"`,
+        '/'
+      );
     });
   };
 
@@ -605,6 +1133,14 @@ export default function RezoApp() {
     });
     await saveMeetups(updated);
     showToast(accept ? `${requesterName} a été accepté·e.` : `Demande de ${requesterName} refusée.`);
+    if (accept) {
+      notifyByName(
+        requesterName,
+        'Demande acceptée',
+        `Tu as été accepté·e pour "${meetup.title}" !`,
+        '/'
+      );
+    }
   };
 
   const REPORT_THRESHOLD = 3;
@@ -631,7 +1167,7 @@ export default function RezoApp() {
   const inviteShareText = (meetup) =>
     `Rejoins-moi pour "${meetup.title}" (${activityById(meetup.activity).label}) le ${formatWhen(meetup.datetime)} à ${
       meetup.zone || 'un lieu à confirmer'
-    }. Retrouve-moi sur RÉZO !`;
+    }. Retrouve-moi sur REZO !`;
 
   const copyInviteText = async (meetup) => {
     try {
@@ -778,11 +1314,13 @@ export default function RezoApp() {
       try {
         const chatRes = await window.storage.get(`chat:${meetup.id}`, true).catch(() => null);
         const chatList = chatRes && chatRes.value ? JSON.parse(chatRes.value) : [];
-        const systemMsg = { id: uid(), author: 'RÉZO', text: `📍 ${name} est arrivé·e sur place.`, sentAt: new Date().toISOString(), system: true };
+        const systemMsg = { id: uid(), author: 'REZO', text: `📍 ${name} est arrivé·e sur place.`, sentAt: new Date().toISOString(), system: true };
         await window.storage.set(`chat:${meetup.id}`, JSON.stringify([...(Array.isArray(chatList) ? chatList : []), systemMsg]), true);
       } catch (err) {
         // notification chat manquée, l'arrivée reste enregistrée
       }
+      const others = new Set([meetup.host, ...meetup.participants].filter((p) => p !== name));
+      others.forEach((p) => notifyByName(p, 'Quelqu’un est arrivé', `📍 ${name} est arrivé·e à "${meetup.title}"`, '/'));
     } catch (err) {
       showToast("Impossible d'enregistrer ton arrivée, réessaie.");
     }
@@ -909,7 +1447,9 @@ export default function RezoApp() {
     _bearing: userCoords && m.coords ? bearingDeg(userCoords, m.coords) : null,
   }));
 
-  const activeFilterCount = (selectedAudience !== 'all' ? 1 : 0) + (mineOnly ? 1 : 0) + (showPast ? 1 : 0);
+  const ageFilterActive = ageFilterMin > 16 || ageFilterMax < 99;
+  const activeFilterCount =
+    (selectedAudience !== 'all' ? 1 : 0) + (mineOnly ? 1 : 0) + (showPast ? 1 : 0) + (ageFilterActive ? 1 : 0);
 
   const journeyMeetup = journeyMeetupId ? meetups.find((m) => m.id === journeyMeetupId) || null : null;
   const arrivalsList = journeyMeetup
@@ -922,17 +1462,33 @@ export default function RezoApp() {
     setSelectedAudience('all');
     setMineOnly(false);
     setShowPast(false);
+    setAgeFilterMin(16);
+    setAgeFilterMax(99);
   };
 
-  const filtered = withDistance.filter((m) => {
+  // Critères "cœur" : tout sauf la localisation (zone/rayon). Sert à distinguer un flux
+  // "vraiment vide" (aucune rencontre ne correspond, période) d'un flux juste "vide ici"
+  // (des rencontres existent mais ailleurs) — pour ne jamais montrer un mur sans solution.
+  const matchesCore = (m) => {
     const isHostOfM = userName && m.host === userName;
     if ((m.reports || []).length >= REPORT_THRESHOLD && !isHostOfM) return false;
     const matchesActivity = selectedActivity === 'all' ? true : m.activity === selectedActivity;
     if (!matchesActivity) return false;
+    // Pas de catégorie choisie via l'autocomplétion : le texte tapé filtre librement sur le titre.
+    if (selectedActivity === 'all' && activityQuery.trim()) {
+      if (!m.title.toLowerCase().includes(activityQuery.trim().toLowerCase())) return false;
+    }
     const matchesAudience = selectedAudience === 'all' ? true : (m.audience || 'mixte') === selectedAudience;
     if (!matchesAudience) return false;
+    const meetupAgeMin = m.ageMin || 18;
+    const meetupAgeMax = m.ageMax || 99;
+    if (meetupAgeMin > ageFilterMax || meetupAgeMax < ageFilterMin) return false;
     if (!showPast && isPast(m)) return false;
     if (mineOnly && !(userName && (m.host === userName || m.participants.includes(userName)))) return false;
+    return true;
+  };
+
+  const matchesLocation = (m) => {
     const matchesZoneText = zoneQuery.trim()
       ? m.zone.toLowerCase().includes(zoneQuery.trim().toLowerCase())
       : true;
@@ -942,18 +1498,29 @@ export default function RezoApp() {
       return m._distance <= radiusKm && matchesZoneText;
     }
     return matchesZoneText;
-  });
+  };
+
+  const byDistanceThenDate = (x, y) => {
+    if (x._distance !== null && y._distance !== null) return x._distance - y._distance;
+    if (x._distance !== null) return -1;
+    if (y._distance !== null) return 1;
+    return new Date(x.datetime) - new Date(y.datetime);
+  };
+
+  const coreFiltered = withDistance.filter(matchesCore);
+  const filtered = coreFiltered.filter(matchesLocation);
+
+  const locationFilterActive = !!zoneQuery.trim() || (!!userCoords && radiusKm < 30);
+  // "Ville fantôme" : rien ici, mais des rencontres existent ailleurs -> ne jamais montrer un
+  // mur, proposer les plus proches (ou les plus proches dans le temps si pas de position).
+  const nearbyFallback =
+    filtered.length === 0 && locationFilterActive
+      ? [...coreFiltered].sort(byDistanceThenDate).slice(0, 6)
+      : [];
 
   const grouped = ACTIVITIES.map((a) => ({
     ...a,
-    items: filtered
-      .filter((m) => m.activity === a.id)
-      .sort((x, y) => {
-        if (x._distance !== null && y._distance !== null) return x._distance - y._distance;
-        if (x._distance !== null) return -1;
-        if (y._distance !== null) return 1;
-        return new Date(x.datetime) - new Date(y.datetime);
-      }),
+    items: filtered.filter((m) => m.activity === a.id).sort(byDistanceThenDate),
   })).filter((g) => g.items.length > 0);
 
   const recommended = userPreferences.length
@@ -966,39 +1533,368 @@ export default function RezoApp() {
         .slice(0, 6)
     : [];
 
+  // Suggestions d'autocomplétion de la barre "Rechercher une activité" — sur le nom des
+  // catégories, remplace la rangée d'icônes retirée de cet écran.
+  const activitySuggestions = activityQuery.trim()
+    ? ACTIVITIES.filter((a) => a.label.toLowerCase().includes(activityQuery.trim().toLowerCase())).slice(0, 6)
+    : [];
+
+  // Toutes les personnes croisées par l'utilisateur (co-participants ou organisateurs de
+  // rencontres passées ou en cours) — sert de base à "déjà rencontré" / "amis en commun".
+  // La confiance vient de la familiarité, pas de l'anonymat.
+  const knownPeople = new Set();
+  if (userName) {
+    meetups.forEach((m) => {
+      const inThisOne = m.host === userName || m.participants.includes(userName);
+      if (!inThisOne) return;
+      if (m.host !== userName) knownPeople.add(m.host);
+      m.participants.forEach((p) => {
+        if (p !== userName) knownPeople.add(p);
+      });
+    });
+  }
+
+  // Rendu d'une carte de rencontre, partagé entre la liste normale (groupée par activité)
+  // et la liste de repli "à proximité" (quand le flux local est vide).
+  const renderMeetupCard = (m) => {
+    const isIn = userName && m.participants.includes(userName);
+    const isPending = userName && (m.pendingRequests || []).some((r) => r.name === userName);
+    const audience = m.audience || 'mixte';
+    const genderBlocked =
+      !isIn &&
+      !isPending &&
+      userGender &&
+      ((audience === 'femmes' && userGender !== 'femme') ||
+        (audience === 'hommes' && userGender !== 'homme'));
+    const isFull = m.participants.length >= m.maxParticipants && !isIn;
+    const isHost = userName && m.host === userName;
+    const hostVerified = !!verifiedMap[m.host];
+    const alreadyMetHost = !isHost && knownPeople.has(m.host);
+    const mutualCount = !isHost && !alreadyMetHost
+      ? m.participants.filter((p) => p !== userName && knownPeople.has(p)).length
+      : 0;
+    const past = isPast(m);
+    const pendingRequests = m.pendingRequests || [];
+    const hostStats = hostRatingStats(m.host);
+    const satisfactionStats = meetupSatisfactionStats(m);
+    const alreadyRated = userName && (m.ratings || []).some((r) => r.rater === userName);
+    const canRate = past && isIn && !isHost && !alreadyRated;
+    return (
+      <div
+        className={`card ${past ? 'card-past' : ''}`}
+        key={m.id}
+        style={{ '--card-accent': activityById(m.activity).color }}
+      >
+        <div className="card-top">
+          <div className="card-top-left">
+            <div className="card-title">{m.title}</div>
+            {hostStats && (
+              <span className="card-rating-pill" title={`${hostStats.avg.toFixed(1)}/5 (${hostStats.count} avis)`}>
+                <Star size={11} fill="var(--amber)" color="var(--amber)" />
+                {hostStats.avg.toFixed(1)}
+              </span>
+            )}
+          </div>
+          {isHost && (
+            <div className="card-actions">
+              <button
+                className="delete-btn"
+                title="Modifier"
+                onClick={() => {
+                  setEditingMeetup(m);
+                  setShowCreate(true);
+                }}
+              >
+                <Pencil size={13} />
+              </button>
+              <button className="delete-btn" title="Supprimer" onClick={() => setConfirmDeleteId(m.id)}>
+                <X size={13} />
+              </button>
+            </div>
+          )}
+        </div>
+        {audience !== 'mixte' && (
+          <span className={`audience-badge audience-${audience}`}>
+            {audience === 'femmes' ? '100% Femmes' : '100% Hommes'}
+          </span>
+        )}
+        {m.started && !past && (
+          <span className="live-badge">
+            <span className="pulse"></span> En cours
+          </span>
+        )}
+        <div className="card-meta">
+          <div className="card-meta-row">
+            <MapPin size={12} /> {m.location ? `${m.location} · ${m.zone || ''}` : m.zone || 'Zone non précisée'}
+            {m._distance !== null && <span style={{ color: 'var(--live)' }}> · {formatDistance(m._distance)}</span>}
+          </div>
+          {mapsLinkFor(m) && (
+            <a
+              className="maps-link"
+              href={mapsLinkFor(m)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink size={11} /> Voir sur la carte
+            </a>
+          )}
+          <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime)}{past && ' · Terminée'}</div>
+          <div className="card-meta-row"><Cake size={12} /> {formatAgeRange(m.ageMin, m.ageMax)}</div>
+          <div className="card-meta-row">
+            Organisé par {m.host}{isHost ? ' (toi)' : ''}
+            {hostVerified && (
+              <span className="card-verified-badge" title="Numéro de téléphone vérifié">
+                <ShieldCheck size={12} /> Vérifié
+              </span>
+            )}
+            {hostStats && <StarDisplay value={hostStats.avg} count={hostStats.count} size={11} />}
+          </div>
+          {satisfactionStats && (
+            <div className="card-meta-row">
+              Satisfaction <StarDisplay value={satisfactionStats.avg} count={satisfactionStats.count} size={11} />
+            </div>
+          )}
+        </div>
+        {(alreadyMetHost || mutualCount > 0) && (
+          <div className="trust-row">
+            <Users size={12} />
+            {alreadyMetHost
+              ? `Organisé par quelqu'un que tu as déjà rencontré`
+              : `${mutualCount} ami${mutualCount > 1 ? 's' : ''} en commun parmi les participants`}
+          </div>
+        )}
+        {m.note && <div className="card-note">{m.note}</div>}
+        <div className="avatars">
+          {m.participants.slice(0, 6).map((p) => (
+            <Avatar key={p} name={p} avatarUrl={profilesMap[p]} size={22} />
+          ))}
+          {m.participants.length > 6 && <span className="avatar more">+{m.participants.length - 6}</span>}
+        </div>
+
+        {isHost && pendingRequests.length > 0 && (
+          <div className="pending-box">
+            <div className="pending-title">
+              {pendingRequests.length} demande{pendingRequests.length > 1 ? 's' : ''} en attente
+            </div>
+            {pendingRequests.map((r) => (
+              <div className="pending-row" key={r.name}>
+                <span>
+                  {r.name}
+                  {r.invitedBy && <span className="pending-invited-by"> · invité·e par {r.invitedBy}</span>}
+                </span>
+                <div className="pending-actions">
+                  <button
+                    className="pending-accept"
+                    title="Accepter"
+                    onClick={() => respondToRequest(m, r.name, true)}
+                  >
+                    <Check size={13} />
+                  </button>
+                  <button
+                    className="pending-reject"
+                    title="Refuser"
+                    onClick={() => respondToRequest(m, r.name, false)}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="card-footer">
+          <div className="card-count">
+            <Users size={12} /> {m.participants.length}/{m.maxParticipants}
+          </div>
+          <div className="footer-actions">
+            {!isHost && (
+              <button
+                className="chat-icon-btn"
+                title="Signaler cette rencontre"
+                onClick={() => setReportingMeetup(m)}
+              >
+                <Flag size={13} />
+              </button>
+            )}
+            <button
+              className="chat-icon-btn"
+              disabled={!isIn && !isHost}
+              title={isIn || isHost ? 'Discussion du groupe' : 'Réservé aux membres acceptés'}
+              onClick={() => openChat(m)}
+            >
+              <MessageCircle size={14} />
+            </button>
+            {(isIn || isHost) && (
+              <button
+                className="chat-icon-btn"
+                title="Inviter des amis"
+                onClick={() => {
+                  setInvitingMeetup(m);
+                  setInviteNameDraft('');
+                }}
+              >
+                <UserPlus size={14} />
+              </button>
+            )}
+            {isHost && !m.started && !past && (
+              <button className="rate-btn" title="Démarrer la rencontre" onClick={() => startMeetup(m)}>
+                <Radio size={13} />
+                Démarrer
+              </button>
+            )}
+            {m.started && (isIn || isHost) && (
+              <button
+                className="chat-icon-btn live-btn"
+                title="Mon trajet vers la rencontre"
+                onClick={() => {
+                  setJourneyMeetupId(m.id);
+                  setJourneyError(null);
+                }}
+              >
+                <Navigation size={14} />
+                {Object.keys(m.arrivals || {}).length > 0 && (
+                  <span className="arrivals-count">{Object.keys(m.arrivals || {}).length}</span>
+                )}
+              </button>
+            )}
+            {canRate && (
+              <button
+                className="rate-btn"
+                onClick={() => {
+                  setRatingMeetup(m);
+                  setRatingHostStars(0);
+                  setRatingSatisfactionStars(0);
+                }}
+              >
+                <Star size={13} />
+                Noter
+              </button>
+            )}
+            <button
+              className={`join-btn ${
+                isFull || genderBlocked ? 'full' : isIn ? 'leave' : isPending ? 'pending' : 'join'
+              }`}
+              disabled={isFull || genderBlocked}
+              title={genderBlocked ? `Réservé ${audience === 'femmes' ? 'aux femmes' : 'aux hommes'}` : undefined}
+              onClick={() => requestOrLeave(m)}
+            >
+              {isIn
+                ? 'Quitter'
+                : isPending
+                ? 'Annuler la demande'
+                : isFull
+                ? 'Complet'
+                : genderBlocked
+                ? 'Non éligible'
+                : 'Demander à rejoindre'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="rezo-app">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
-
         .rezo-app {
-          --ink: #12141C;
-          --card: #1C1F29;
-          --card-hover: #232735;
-          --border: #2C3040;
-          --text: #ECEEF3;
-          --muted: #8B90A0;
-          --live: #4FD1C5;
+          --ink: #F0F2F5;
+          --card: #FFFFFF;
+          --card-hover: #F7F8FA;
+          --border: #DADDE1;
+          --border-strong: #C6C9CC;
+          --text: #1C1E21;
+          --muted: #65676B;
+          --live: #1877F2;
+          --live-rgb: 24,119,242;
+          --online: #31A24C;
+          --online-rgb: 49,162,76;
           --amber: #F2A65A;
+          --danger: #FA383E;
+          --nav-h: 64px;
+          --cta-grad: linear-gradient(135deg, #1877F2, #145DBF);
           font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
           background: var(--ink);
           color: var(--text);
-          min-height: 600px;
-          border-radius: 16px;
-          padding: 0;
+          height: 100%;
+          width: 100%;
+          display: flex;
+          flex-direction: column;
           position: relative;
           overflow: hidden;
         }
         .rezo-display { font-family: 'Space Grotesk', 'Inter', sans-serif; }
 
+        .splash-screen {
+          position: absolute; inset: 0; z-index: 50;
+          display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+          background: var(--card);
+          transition: opacity 0.4s ease;
+        }
+        .splash-screen.hide { opacity: 0; pointer-events: none; }
+        .splash-badge {
+          position: relative;
+          width: 84px; height: 84px; border-radius: 26px;
+          background: var(--cta-grad);
+          display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 14px 30px rgba(24,119,242,0.35);
+          animation: splash-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+        .splash-badge-letter {
+          font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 40px; color: #fff;
+        }
+        .splash-badge-dot {
+          position: absolute; top: 13px; right: 13px;
+          width: 12px; height: 12px; border-radius: 50%;
+          background: var(--online);
+          border: 2px solid #fff;
+          box-shadow: 0 0 0 0 rgba(var(--online-rgb),0.7);
+          animation: pulse-online 1.8s infinite 0.7s;
+        }
+        @keyframes pulse-online {
+          0% { box-shadow: 0 0 0 0 rgba(var(--online-rgb),0.55); }
+          70% { box-shadow: 0 0 0 8px rgba(var(--online-rgb),0); }
+          100% { box-shadow: 0 0 0 0 rgba(var(--online-rgb),0); }
+        }
+        @keyframes splash-pop {
+          0% { transform: scale(0.55); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .splash-tagline {
+          font-size: 12.5px; color: var(--muted);
+          opacity: 0; animation: splash-fade-up 0.6s ease 0.35s forwards;
+        }
+        .splash-loader { display: flex; gap: 5px; margin-top: 4px; opacity: 0; animation: splash-fade-up 0.6s ease 0.5s forwards; }
+        .splash-loader span {
+          width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong);
+          animation: splash-bounce 1s ease-in-out infinite;
+        }
+        .splash-loader span:nth-child(1) { animation-delay: 0s; }
+        .splash-loader span:nth-child(2) { animation-delay: 0.15s; }
+        .splash-loader span:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes splash-fade-up {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes splash-bounce {
+          0%, 80%, 100% { background: var(--border-strong); transform: scale(1); }
+          40% { background: var(--live); transform: scale(1.3); }
+        }
+
         .rezo-header {
+          flex-shrink: 0;
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 16px;
-          padding: 22px 24px 16px;
+          padding: calc(18px + env(safe-area-inset-top)) 24px 16px;
           border-bottom: 1px solid var(--border);
           flex-wrap: wrap;
+          background: var(--ink);
+          position: relative;
+          z-index: 1;
         }
         .rezo-brand {
           font-family: 'Space Grotesk', sans-serif;
@@ -1014,78 +1910,80 @@ export default function RezoApp() {
 
         .rezo-live {
           display: flex; align-items: center; gap: 6px;
-          font-size: 12.5px; color: var(--live);
+          font-size: 12.5px; color: var(--online);
         }
         .rezo-live .pulse {
           width: 7px; height: 7px; border-radius: 50%;
-          background: var(--live);
-          box-shadow: 0 0 0 0 rgba(79,209,197,0.7);
+          background: var(--online);
+          box-shadow: 0 0 0 0 rgba(var(--online-rgb),0.7);
           animation: pulse 1.8s infinite;
         }
-        .header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-        .profile-btn {
-          display: flex; align-items: center; gap: 6px;
-          background: var(--card); border: 1px solid var(--border); color: var(--text);
-          border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer;
-          font-family: 'Inter', sans-serif; max-width: 160px;
-        }
-        .profile-btn:hover { border-color: var(--live); }
-        .profile-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         @keyframes pulse {
-          0% { box-shadow: 0 0 0 0 rgba(79,209,197,0.55); }
-          70% { box-shadow: 0 0 0 8px rgba(79,209,197,0); }
-          100% { box-shadow: 0 0 0 0 rgba(79,209,197,0); }
+          0% { box-shadow: 0 0 0 0 rgba(var(--online-rgb),0.55); }
+          70% { box-shadow: 0 0 0 8px rgba(var(--online-rgb),0); }
+          100% { box-shadow: 0 0 0 0 rgba(var(--online-rgb),0); }
         }
 
         .rezo-controls {
-          display: flex; gap: 10px; padding: 14px 24px; flex-wrap: wrap;
+          display: flex; flex-direction: column; gap: 10px; padding: 14px 24px;
           border-bottom: 1px solid var(--border);
-          align-items: center;
+          background: var(--ink);
+          position: relative;
+          z-index: 1;
         }
+        .rezo-search-row { display: flex; gap: 10px; flex-wrap: wrap; }
         .rezo-zone-input {
           display: flex; align-items: center; gap: 8px;
           background: var(--card);
           border: 1px solid var(--border);
           border-radius: 10px;
           padding: 8px 12px;
-          min-width: 220px;
+          flex: 1 1 150px;
+          min-width: 0;
+          position: relative;
         }
         .rezo-zone-input input {
           background: transparent; border: none; outline: none;
-          color: var(--text); font-size: 13.5px; width: 100%;
+          color: var(--text); font-size: 13.5px; width: 100%; min-width: 0;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
           font-family: 'Inter', sans-serif;
         }
         .rezo-zone-input input::placeholder { color: var(--muted); }
 
+        .activity-suggest-list {
+          position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 5;
+          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow: hidden;
+        }
+        .activity-suggest-item {
+          display: flex; align-items: center; gap: 8px; width: 100%;
+          background: none; border: none; text-align: left; cursor: pointer;
+          padding: 9px 12px; font-size: 13px; color: var(--text); font-family: 'Inter', sans-serif;
+        }
+        .activity-suggest-item:hover { background: var(--card-hover); }
+        .activity-suggest-icon {
+          width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0;
+          display: flex; align-items: center; justify-content: center;
+        }
+
         .geo-btn {
-          display: flex; align-items: center; gap: 6px;
+          display: flex; align-items: center; justify-content: center; gap: 6px;
           background: var(--card); border: 1px solid var(--border);
-          color: var(--text); border-radius: 10px; padding: 8px 13px;
-          font-size: 12.5px; font-family: 'Inter', sans-serif; cursor: pointer;
+          color: var(--text); border-radius: 10px; padding: 10px 13px;
+          font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; cursor: pointer;
         }
         .geo-btn:hover { border-color: var(--live); }
         .geo-btn:disabled { opacity: 0.7; cursor: default; }
+        .geo-btn.full { width: 100%; }
+        .geo-btn.active { background: rgba(var(--online-rgb),0.12); border-color: var(--online); color: var(--online); }
 
         .toggle-btn {
           background: var(--card); border: 1px solid var(--border);
           color: var(--muted); border-radius: 10px; padding: 8px 13px;
           font-size: 12.5px; font-family: 'Inter', sans-serif; cursor: pointer;
         }
-        .toggle-btn:hover { border-color: #3A3F52; }
+        .toggle-btn:hover { border-color: var(--border-strong); }
         .toggle-btn.active { background: var(--text); color: var(--ink); border-color: var(--text); font-weight: 600; }
-
-        .filters-toggle {
-          display: flex; align-items: center; gap: 6px;
-          background: var(--card); border: 1px solid var(--border); color: var(--text);
-          border-radius: 10px; padding: 8px 13px; font-size: 12.5px; cursor: pointer;
-          font-family: 'Inter', sans-serif;
-        }
-        .filters-toggle:hover, .filters-toggle.active { border-color: var(--live); color: var(--live); }
-        .filters-badge {
-          background: var(--live); color: #0B1010; font-size: 10px; font-weight: 700;
-          border-radius: 999px; min-width: 16px; height: 16px; display: flex;
-          align-items: center; justify-content: center; padding: 0 4px;
-        }
 
         .filters-panel {
           margin: 8px 24px 4px; padding: 14px; background: var(--card);
@@ -1101,27 +1999,6 @@ export default function RezoApp() {
           cursor: pointer; text-decoration: underline; font-family: 'Inter', sans-serif;
         }
 
-        /* Rangée de catégories façon Glovo : icônes rondes toujours visibles */
-        .category-scroll {
-          display: flex; gap: 16px; overflow-x: auto; padding: 14px 24px 6px;
-        }
-        .category-item {
-          flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 6px;
-          background: none; border: none; cursor: pointer; font-family: 'Inter', sans-serif;
-        }
-        .category-icon {
-          width: 52px; height: 52px; border-radius: 16px;
-          display: flex; align-items: center; justify-content: center;
-          border: 1px solid var(--border); transition: transform 0.12s ease;
-        }
-        .category-item:hover .category-icon { transform: translateY(-2px); }
-        .category-item.active .category-icon { border-color: transparent; }
-        .category-label {
-          font-size: 10.5px; color: var(--muted); max-width: 60px; text-align: center;
-          line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .category-item.active .category-label { color: var(--text); font-weight: 600; }
-
         /* Bottom sheet façon Tinder pour les filtres avancés */
         .sheet-overlay {
           position: absolute; inset: 0; background: rgba(8,9,13,0.72);
@@ -1129,8 +2006,14 @@ export default function RezoApp() {
         }
         .sheet {
           width: 100%; background: var(--card); border-top: 1px solid var(--border);
-          border-radius: 20px 20px 0 0; padding: 10px 22px 20px; max-height: 85%;
+          border-radius: 20px 20px 0 0; padding: 10px 22px calc(20px + env(safe-area-inset-bottom)); max-height: 85%;
           overflow-y: auto; display: flex; flex-direction: column; gap: 18px;
+          box-shadow: 0 -8px 30px rgba(0,0,0,0.12);
+          animation: sheet-in 0.2s ease;
+        }
+        @keyframes sheet-in {
+          from { transform: translateY(24px); opacity: 0.6; }
+          to { transform: translateY(0); opacity: 1; }
         }
         .sheet-handle { width: 36px; height: 4px; border-radius: 999px; background: var(--border); margin: 0 auto 4px; }
         .sheet-header { display: flex; justify-content: space-between; align-items: center; }
@@ -1147,9 +2030,21 @@ export default function RezoApp() {
           font-size: 12.5px; font-family: 'Inter', sans-serif; padding: 8px 6px;
           border-radius: 8px; cursor: pointer;
         }
-        .segmented-item.active { background: var(--live); color: #0B1010; font-weight: 600; }
+        .segmented-item.active { background: var(--live); color: #fff; font-weight: 600; }
 
         .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .push-toggle-row {
+          background: var(--ink); border: 1px solid var(--border); border-radius: 10px;
+          padding: 10px 12px; margin-bottom: 14px;
+        }
+        .streak-card {
+          display: flex; align-items: center; gap: 10px;
+          background: rgba(242,166,90,0.1); border: 1px solid rgba(242,166,90,0.3);
+          border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; color: var(--amber);
+        }
+        .streak-card.unlocked { background: rgba(242,166,90,0.16); border-color: var(--amber); }
+        .streak-card-title { font-size: 13px; font-weight: 700; color: var(--text); }
+        .streak-card-subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
         .switch-title { font-size: 13.5px; font-weight: 600; }
         .switch-subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
         .switch {
@@ -1162,7 +2057,7 @@ export default function RezoApp() {
           position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
           background: var(--text); transition: transform 0.15s ease;
         }
-        .switch.on .switch-knob { transform: translateX(18px); background: #0B1010; }
+        .switch.on .switch-knob { transform: translateX(18px); }
 
         .radius-control {
           display: flex; align-items: center; gap: 8px;
@@ -1210,11 +2105,18 @@ export default function RezoApp() {
           transition: all 0.15s ease;
           display: flex; align-items: center; gap: 6px;
         }
-        .chip:hover { border-color: #3A3F52; }
+        .chip:hover { border-color: var(--border-strong); }
         .chip.active { background: var(--text); color: var(--ink); border-color: var(--text); font-weight: 600; }
         .chip .swatch { width: 7px; height: 7px; border-radius: 50%; }
 
-        .rezo-body { padding: 8px 24px 100px; max-height: 560px; overflow-y: auto; }
+        .rezo-scroll {
+          flex: 1 1 auto;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          display: flex;
+          flex-direction: column;
+        }
+        .rezo-body { padding: 8px 24px calc(24px + var(--nav-h) + env(safe-area-inset-bottom)); }
 
         .recommended-wrap { padding: 14px 24px 4px; }
         .recommended-title {
@@ -1223,7 +2125,9 @@ export default function RezoApp() {
         }
         .recommended-scroll {
           display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px;
+          scrollbar-width: none;
         }
+        .recommended-scroll::-webkit-scrollbar { display: none; }
         .recommended-card {
           flex: 0 0 auto; width: 180px; text-align: left; cursor: pointer;
           background: var(--card); border: 1px solid var(--border); border-radius: 12px;
@@ -1250,14 +2154,16 @@ export default function RezoApp() {
         .card {
           background: var(--card);
           border: 1px solid var(--border);
+          border-left: 3px solid var(--card-accent, transparent);
           border-radius: 12px;
           padding: 14px;
           display: flex; flex-direction: column; gap: 10px;
-          transition: border-color 0.15s ease, background 0.15s ease;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.06);
         }
-        .card:hover { border-color: #3A3F52; background: var(--card-hover); }
+        .card:hover { border-color: var(--border-strong); background: var(--card-hover); box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
         .card-title { font-weight: 600; font-size: 14.5px; line-height: 1.3; }
         .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+        .card-top-left { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
         .card-actions { display: flex; gap: 2px; flex-shrink: 0; }
         .delete-btn {
           background: none; border: none; color: var(--muted); cursor: pointer;
@@ -1274,18 +2180,18 @@ export default function RezoApp() {
         .live-badge {
           align-self: flex-start; display: flex; align-items: center; gap: 5px;
           font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
-          background: rgba(79,209,197,0.16); color: var(--live);
+          background: rgba(var(--online-rgb),0.14); color: var(--online);
         }
         .live-badge .pulse {
-          width: 6px; height: 6px; border-radius: 50%; background: var(--live);
-          box-shadow: 0 0 0 0 rgba(79,209,197,0.7); animation: pulse 1.8s infinite;
+          width: 6px; height: 6px; border-radius: 50%; background: var(--online);
+          box-shadow: 0 0 0 0 rgba(var(--online-rgb),0.7); animation: pulse 1.8s infinite;
         }
         .live-btn { border-color: var(--live); color: var(--live); }
         .avatars { display: flex; gap: -4px; }
         .avatars > *:not(:first-child) { margin-left: -6px; }
         .avatar {
           width: 22px; height: 22px; border-radius: 50%;
-          background: var(--live); color: #0B1010; font-size: 10px; font-weight: 700;
+          background: var(--live); color: #fff; font-size: 10px; font-weight: 700;
           display: flex; align-items: center; justify-content: center;
           border: 2px solid var(--card);
         }
@@ -1305,7 +2211,7 @@ export default function RezoApp() {
           font-size: 12.5px; font-weight: 600; cursor: pointer;
           font-family: 'Inter', sans-serif;
         }
-        .join-btn.join { background: var(--live); color: #0B1010; }
+        .join-btn.join { background: var(--live); color: #fff; }
         .join-btn.leave { background: transparent; border: 1px solid var(--border); color: var(--text); }
         .join-btn.full { background: var(--border); color: var(--muted); cursor: not-allowed; }
         .join-btn.pending { background: transparent; border: 1px solid var(--amber); color: var(--amber); }
@@ -1322,7 +2228,7 @@ export default function RezoApp() {
           border: none; border-radius: 6px; width: 24px; height: 24px;
           display: flex; align-items: center; justify-content: center; cursor: pointer;
         }
-        .pending-accept { background: var(--live); color: #0B1010; }
+        .pending-accept { background: var(--live); color: #fff; }
         .pending-reject { background: var(--border); color: var(--text); }
 
         .footer-actions { display: flex; align-items: center; gap: 6px; }
@@ -1353,20 +2259,75 @@ export default function RezoApp() {
         .star-picker-btn { background: none; border: none; cursor: pointer; padding: 2px; }
 
         .rezo-empty {
-          text-align: center; padding: 60px 20px; color: var(--muted);
+          text-align: center; padding: 60px 20px 24px; color: var(--muted);
         }
         .rezo-empty-title { font-family: 'Space Grotesk', sans-serif; font-size: 16px; color: var(--text); margin-bottom: 6px; }
 
-        .fab {
-          position: absolute; bottom: 22px; right: 24px;
-          background: var(--amber); color: #14161C;
-          border: none; border-radius: 999px;
-          width: 52px; height: 52px;
-          display: flex; align-items: center; justify-content: center;
-          cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.35);
-          transition: transform 0.15s ease;
+        .quick-templates {
+          display: flex; flex-direction: column; gap: 8px;
+          max-width: 280px; margin: 18px auto 0;
         }
-        .fab:hover { transform: scale(1.06); }
+        .quick-template-card {
+          display: flex; align-items: center; gap: 10px;
+          background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+          padding: 12px 14px; cursor: pointer; text-align: left;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+        }
+        .quick-template-card:hover { border-color: var(--live); background: var(--card-hover); }
+        .quick-template-emoji { font-size: 20px; flex-shrink: 0; }
+        .quick-template-label { font-size: 13.5px; font-weight: 600; color: var(--text); font-family: 'Inter', sans-serif; }
+
+        .rezo-fallback-banner {
+          display: flex; align-items: center; gap: 8px;
+          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          padding: 10px 14px; margin-bottom: 14px; font-size: 12.5px; color: var(--muted);
+        }
+        .rezo-fallback-banner svg { flex-shrink: 0; color: var(--live); }
+
+        .bottom-nav {
+          flex-shrink: 0;
+          position: relative;
+          z-index: 12;
+          display: flex;
+          align-items: center;
+          justify-content: space-around;
+          gap: 2px;
+          height: var(--nav-h);
+          padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
+          background: rgba(255,255,255,0.92);
+          backdrop-filter: blur(18px);
+          -webkit-backdrop-filter: blur(18px);
+          border-top: 1px solid var(--border);
+        }
+        .bottom-nav-item {
+          flex: 1;
+          min-width: 0;
+          display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+          background: none; border: none; color: var(--muted);
+          font-size: 10px; font-family: 'Inter', sans-serif; cursor: pointer;
+          padding: 6px 2px; border-radius: 10px; position: relative;
+          transition: color 0.15s ease, transform 0.1s ease;
+        }
+        .bottom-nav-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+        .bottom-nav-item:active { transform: scale(0.92); }
+        .bottom-nav-item.active { color: var(--live); }
+        .bottom-nav-badge {
+          position: absolute; top: 0px; left: 50%; transform: translateX(6px);
+          background: var(--amber); color: #14161C; font-size: 9px; font-weight: 700;
+          border-radius: 999px; min-width: 14px; height: 14px; display: flex;
+          align-items: center; justify-content: center; padding: 0 3px;
+        }
+        .bottom-nav-center {
+          flex-shrink: 0;
+          width: 54px; height: 54px; border-radius: 50%;
+          background: var(--cta-grad);
+          color: #fff; border: 4px solid var(--ink);
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; margin-top: -30px;
+          box-shadow: 0 8px 20px rgba(var(--live-rgb),0.4);
+          transition: transform 0.12s ease;
+        }
+        .bottom-nav-center:active { transform: scale(0.9); }
 
         .modal-overlay {
           position: absolute; inset: 0; background: rgba(8,9,13,0.72);
@@ -1375,12 +2336,53 @@ export default function RezoApp() {
         }
         .modal {
           background: var(--card); border: 1px solid var(--border);
-          border-radius: 14px; padding: 22px; width: 100%; max-width: 380px;
+          border-radius: 18px; padding: 22px; width: 100%; max-width: 380px;
           max-height: 90%; overflow-y: auto;
+          box-shadow: 0 16px 40px rgba(0,0,0,0.16);
+          animation: modal-in 0.18s ease;
+        }
+        @keyframes modal-in {
+          from { opacity: 0; transform: translateY(10px) scale(0.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
         }
         .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
         .modal-title { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; }
         .modal-close { background: none; border: none; color: var(--muted); cursor: pointer; }
+
+        /* Modale de profil façon Facebook : bannière de couverture + photo circulaire superposée */
+        .profile-modal { padding: 0; }
+        .profile-modal-close {
+          position: absolute; top: 10px; right: 10px; z-index: 2;
+          width: 30px; height: 30px; border-radius: 50%;
+          background: rgba(0,0,0,0.35); color: #fff;
+          display: flex; align-items: center; justify-content: center;
+        }
+        .profile-cover {
+          height: 84px; border-radius: 18px 18px 0 0;
+          background: var(--cta-grad);
+        }
+        .profile-avatar-wrap {
+          position: relative; width: fit-content; margin: -44px auto 0;
+          display: flex; justify-content: center;
+        }
+        .profile-avatar-wrap .avatar,
+        .profile-avatar-wrap img {
+          border: 4px solid var(--card) !important;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
+        .profile-avatar-edit-btn {
+          position: absolute; bottom: 2px; right: 2px;
+          width: 28px; height: 28px; border-radius: 50%;
+          background: var(--card); border: 2px solid var(--card);
+          box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; color: var(--text);
+        }
+        .profile-avatar-edit-btn:hover { background: var(--card-hover); }
+        .profile-avatar-remove {
+          display: block; margin: 8px auto 0; text-align: center;
+        }
+        .profile-modal-body { padding: 14px 22px 22px; overflow-y: auto; }
 
         .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
         .field label { font-size: 12px; color: var(--muted); }
@@ -1399,8 +2401,8 @@ export default function RezoApp() {
           border-radius: 8px; padding: 9px 10px; font-size: 12.5px; cursor: pointer;
           font-family: 'Inter', sans-serif;
         }
-        .gender-btn:hover { border-color: #3A3F52; }
-        .gender-btn.active { background: var(--live); color: #0B1010; border-color: var(--live); font-weight: 600; }
+        .gender-btn:hover { border-color: var(--border-strong); }
+        .gender-btn.active { background: var(--live); color: #fff; border-color: var(--live); font-weight: 600; }
 
         .pref-options { display: flex; gap: 6px; flex-wrap: wrap; }
         .pref-chip {
@@ -1409,11 +2411,10 @@ export default function RezoApp() {
           border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer;
           font-family: 'Inter', sans-serif;
         }
-        .pref-chip:hover { border-color: #3A3F52; }
+        .pref-chip:hover { border-color: var(--border-strong); }
         .pref-chip.active { background: var(--text); color: var(--ink); border-color: var(--text); font-weight: 600; }
         .pref-chip .swatch { width: 7px; height: 7px; border-radius: 50%; }
 
-        .avatar-picker { display: flex; align-items: center; gap: 12px; }
         .avatar-upload-btn {
           background: var(--ink); border: 1px solid var(--border); color: var(--text);
           border-radius: 8px; padding: 8px 12px; font-size: 12.5px; cursor: pointer;
@@ -1425,6 +2426,83 @@ export default function RezoApp() {
           cursor: pointer; text-decoration: underline; font-family: 'Inter', sans-serif;
         }
 
+        .auth-intro { font-size: 12.5px; color: var(--muted); line-height: 1.45; margin-bottom: 14px; }
+        .auth-connected-as {
+          font-size: 11px; color: var(--live); background: rgba(var(--live-rgb),0.1);
+          border: 1px solid rgba(var(--live-rgb),0.25); border-radius: 8px;
+          padding: 6px 10px; margin-bottom: 14px; width: fit-content;
+        }
+        .phone-verify-row { display: flex; gap: 8px; align-items: center; }
+        .phone-verify-row input { flex: 1; min-width: 0; }
+        .verified-pill {
+          display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+          background: rgba(var(--online-rgb),0.14); color: var(--online);
+          border: 1px solid rgba(var(--online-rgb),0.35); border-radius: 999px;
+          padding: 6px 10px; font-size: 12px; font-weight: 700; white-space: nowrap;
+        }
+        .verify-code-box {
+          margin-top: 8px; padding: 10px; background: var(--ink); border: 1px solid var(--border);
+          border-radius: 8px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .verify-code-hint { font-size: 11.5px; color: var(--muted); }
+        .verify-code-hint strong { color: var(--text); letter-spacing: 2px; }
+        .card-verified-badge {
+          display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+          color: var(--online); font-size: 10.5px; font-weight: 700;
+        }
+        .card-rating-pill {
+          display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+          background: rgba(242,166,90,0.12); border: 1px solid rgba(242,166,90,0.3);
+          border-radius: 999px; padding: 3px 8px; font-size: 11.5px; font-weight: 700; color: var(--amber);
+        }
+        .trust-row {
+          display: flex; align-items: center; gap: 5px;
+          background: rgba(var(--online-rgb),0.1); color: var(--online);
+          border-radius: 8px; padding: 6px 9px; font-size: 11.5px; font-weight: 600;
+        }
+        .input-with-icon {
+          display: flex; align-items: center; gap: 8px;
+          background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+          padding: 0 11px;
+        }
+        .input-with-icon:focus-within { border-color: var(--live); }
+        .input-with-icon.mismatch { border-color: var(--amber); }
+        .select-with-swatch {
+          display: flex; align-items: center; gap: 9px;
+          background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+          padding: 0 11px;
+        }
+        .select-with-swatch:focus-within { border-color: var(--live); }
+        .select-with-swatch .swatch { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+        .field .select-with-swatch select {
+          border: none; background: transparent; padding: 9px 0; flex: 1; min-width: 0;
+          color: var(--text); font-size: 13.5px; font-family: 'Inter', sans-serif; outline: none;
+        }
+        .age-range-row { display: flex; align-items: center; gap: 8px; }
+        .age-range-row input {
+          width: 64px; text-align: center; flex: none;
+        }
+        .age-range-sep { font-size: 12.5px; color: var(--muted); }
+        .field .input-with-icon input {
+          border: none; background: transparent; padding: 9px 0; flex: 1; min-width: 0;
+          color: var(--text); font-size: 13.5px; font-family: 'Inter', sans-serif; outline: none;
+        }
+        .input-icon-btn {
+          background: none; border: none; color: var(--muted); cursor: pointer;
+          display: flex; align-items: center; padding: 4px; flex-shrink: 0;
+        }
+        .input-icon-btn:hover { color: var(--text); }
+        .auth-error {
+          background: rgba(239,122,155,0.1); border: 1px solid rgba(239,122,155,0.35); color: #EF7A9B;
+          border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 10px; line-height: 1.4;
+        }
+        .auth-switch-btn {
+          width: 100%; background: none; border: none; color: var(--live); font-size: 12.5px;
+          cursor: pointer; text-align: center; margin-top: 12px; font-family: 'Inter', sans-serif;
+        }
+        .auth-logout-btn { color: var(--muted); margin-top: 8px; }
+        .auth-logout-btn:hover { color: var(--amber); }
+
         .invite-preview {
           background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
           padding: 10px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.4;
@@ -1435,10 +2513,12 @@ export default function RezoApp() {
 
         .modal-submit {
           width: 100%; padding: 11px; border: none; border-radius: 9px;
-          background: var(--amber); color: #14161C; font-weight: 600; font-size: 13.5px;
+          background: var(--cta-grad); color: #fff; font-weight: 600; font-size: 13.5px;
           cursor: pointer; margin-top: 4px; font-family: 'Inter', sans-serif;
+          box-shadow: 0 6px 16px rgba(var(--live-rgb),0.28);
         }
-        .modal-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+        .modal-submit:disabled { opacity: 1; cursor: not-allowed; box-shadow: none; background: var(--border); color: var(--muted); }
+        .modal-submit-danger { background: var(--danger); box-shadow: 0 6px 16px rgba(250,56,62,0.28); }
 
         .chat-modal { display: flex; flex-direction: column; max-height: 78%; padding-bottom: 14px; }
 
@@ -1472,10 +2552,10 @@ export default function RezoApp() {
         .live-cta {
           display: flex; align-items: center; justify-content: center; gap: 8px;
           width: 100%; padding: 13px; border-radius: 12px; border: none; cursor: pointer;
-          background: var(--live); color: #0B1010; font-weight: 700; font-size: 13.5px;
+          background: var(--live); color: #fff; font-weight: 700; font-size: 13.5px;
           font-family: 'Inter', sans-serif;
         }
-        .live-cta.active { background: rgba(79,209,197,0.16); color: var(--live); border: 1px solid var(--live); }
+        .live-cta.active { background: rgba(var(--live-rgb),0.16); color: var(--live); border: 1px solid var(--live); }
 
         .privacy-note {
           font-size: 11px; color: var(--muted); background: var(--ink); border: 1px solid var(--border);
@@ -1483,7 +2563,7 @@ export default function RezoApp() {
         }
         .journey-status {
           text-align: center; font-size: 12.5px; color: var(--live); font-weight: 600;
-          background: rgba(79,209,197,0.08); border: 1px solid rgba(79,209,197,0.3);
+          background: rgba(var(--live-rgb),0.08); border: 1px solid rgba(var(--live-rgb),0.3);
           border-radius: 10px; padding: 9px;
         }
         .journey-arrived {
@@ -1507,7 +2587,7 @@ export default function RezoApp() {
           max-width: 78%; background: var(--ink); border: 1px solid var(--border);
           border-radius: 12px; padding: 7px 11px; font-size: 13px;
         }
-        .chat-bubble-row.mine .chat-bubble { background: var(--live); color: #0B1010; border-color: var(--live); }
+        .chat-bubble-row.mine .chat-bubble { background: var(--live); color: #fff; border-color: var(--live); }
         .chat-author { font-size: 10.5px; font-weight: 700; color: var(--live); margin-bottom: 2px; }
         .chat-bubble-row.mine .chat-author { display: none; }
         .chat-text { line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
@@ -1521,7 +2601,7 @@ export default function RezoApp() {
         .chat-input:focus { border-color: var(--live); }
         .chat-send-btn {
           background: var(--live); border: none; border-radius: 9px; width: 38px;
-          display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0B1010;
+          display: flex; align-items: center; justify-content: center; cursor: pointer; color: #fff;
         }
         .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -1535,107 +2615,128 @@ export default function RezoApp() {
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .rezo-body::-webkit-scrollbar { width: 6px; }
-        .rezo-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        .skeleton-card {
+          background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+          padding: 14px; display: flex; flex-direction: column; gap: 10px; height: 148px;
+        }
+        .skeleton-line {
+          height: 10px; border-radius: 6px;
+          background: linear-gradient(90deg, var(--border) 25%, #FFFFFF 37%, var(--border) 63%);
+          background-size: 400% 100%;
+          animation: shimmer 1.4s ease infinite;
+        }
+        .skeleton-line.w-title { width: 65%; height: 14px; }
+        .skeleton-line.w-full { width: 92%; }
+        .skeleton-line.w-half { width: 48%; }
+        .skeleton-line.w-third { width: 34%; }
+        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+        /* Micro-interactions tactiles : léger retour visuel au tap, comme sur une vraie app mobile */
+        .card:active, .chip:active, .join-btn:active,
+        .toggle-btn:active, .geo-btn:active, .preset-btn:active,
+        .pref-chip:active, .gender-btn:active, .segmented-item:active, .recommended-card:active,
+        .rate-btn:active, .chat-icon-btn:active, .avatar-upload-btn:active, .modal-submit:active {
+          transform: scale(0.96);
+        }
+        .card, .chip, .join-btn, .toggle-btn, .geo-btn,
+        .preset-btn, .pref-chip, .gender-btn, .segmented-item, .recommended-card,
+        .rate-btn, .chat-icon-btn, .avatar-upload-btn, .modal-submit {
+          transition: transform 0.1s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .rezo-scroll::-webkit-scrollbar { width: 6px; }
+        .rezo-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
       `}</style>
 
-      {toast && <div className="toast">{toast}</div>}
+      {showSplash && (
+        <div className={`splash-screen ${splashHiding ? 'hide' : ''}`} aria-hidden={splashHiding}>
+          <div className="splash-badge">
+            <span className="splash-badge-letter">R</span>
+            <span className="splash-badge-dot"></span>
+          </div>
+          <div className="splash-tagline">Rencontres par activité, près de toi</div>
+          <div className="splash-loader">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      )}
+
+      {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
 
       <div className="rezo-header">
         <div>
-          <div className="rezo-brand">RÉZO<span className="dot">·</span></div>
+          <div className="rezo-brand">REZO<span className="dot">·</span></div>
           <div className="rezo-tagline">Rencontres par activité, près de toi, à l'instant</div>
         </div>
-        <div className="header-right">
-          <div className="rezo-live">
-            <span className="pulse"></span>
-            En direct{lastSync ? ` · sync ${lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : ''}
-          </div>
-          <button
-            className="profile-btn"
-            title={userName ? `${userName} · Modifier le profil` : 'Créer mon profil'}
-            onClick={() => {
-              if (userName && userGender && userPreferences.length > 0) {
-                setPendingAction(null);
-                setNameDraft(userName);
-                setGenderDraft(userGender);
-                setPreferencesDraft(userPreferences);
-                setAvatarDraft(null);
-                setShowNameModal(true);
-              } else {
-                requireName(() => {});
-              }
-            }}
-          >
-            {userName ? <Avatar name={userName} avatarUrl={userAvatar} size={16} /> : <Settings size={14} />}
-            {userName || 'Profil'}
-          </button>
+        <div className="rezo-live">
+          <span className="pulse"></span>
+          En direct{lastSync ? ` · sync ${lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : ''}
         </div>
       </div>
 
-      <div className="category-scroll">
-        <button
-          className={`category-item ${selectedActivity === 'all' ? 'active' : ''}`}
-          onClick={() => setSelectedActivity('all')}
-        >
-          <span className="category-icon" style={{ background: selectedActivity === 'all' ? 'var(--live)' : 'var(--card)' }}>
-            <LayoutGrid size={20} color={selectedActivity === 'all' ? '#0B1010' : 'var(--muted)'} />
-          </span>
-          <span className="category-label">Toutes</span>
-        </button>
-        {ACTIVITIES.map((a) => {
-          const Icon = ACTIVITY_ICONS[a.id] || Sparkles;
-          const active = selectedActivity === a.id;
-          return (
-            <button key={a.id} className={`category-item ${active ? 'active' : ''}`} onClick={() => setSelectedActivity(a.id)}>
-              <span className="category-icon" style={{ background: active ? a.color : 'var(--card)' }}>
-                <Icon size={20} color={active ? '#12141C' : 'var(--muted)'} />
-              </span>
-              <span className="category-label">{a.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
+      <div className="rezo-scroll">
       <div className="rezo-controls">
-        <div className="rezo-zone-input">
-          <MapPin size={14} color="var(--muted)" />
-          <input
-            placeholder="Filtrer par zone (ex: Maarif, Casablanca)"
-            value={zoneQuery}
-            onChange={(e) => setZoneQuery(e.target.value)}
-          />
-        </div>
-
-        {/* Géolocalisation temporairement désactivée — décommenter pour la réactiver
-        <button className="geo-btn" onClick={requestLocation} disabled={locating}>
-          {locating ? <Loader2 size={13} className="spin" /> : <Navigation size={13} />}
-          {userCoords ? 'Position activée' : locating ? 'Localisation…' : 'Activer ma position'}
-        </button>
-        */}
-
-        {/* Rayon de recherche temporairement désactivé (lié à la géoloc) — décommenter avec la position
-        {userCoords && (
-          <div className="radius-control">
-            <span>Rayon : {radiusKm} km</span>
+        <div className="rezo-search-row">
+          <div className="rezo-zone-input activity-search">
+            <Search size={14} color="var(--muted)" />
             <input
-              type="range"
-              min={1}
-              max={30}
-              value={radiusKm}
-              onChange={(e) => setRadiusKm(Number(e.target.value))}
+              placeholder="Rechercher une activité…"
+              value={activityQuery}
+              onChange={(e) => {
+                setActivityQuery(e.target.value);
+                setSelectedActivity('all');
+                setActivitySuggestOpen(true);
+              }}
+              onFocus={() => setActivitySuggestOpen(true)}
+              onBlur={() => setTimeout(() => setActivitySuggestOpen(false), 150)}
+            />
+            {activitySuggestOpen && activitySuggestions.length > 0 && (
+              <div className="activity-suggest-list">
+                {activitySuggestions.map((a) => {
+                  const Icon = ACTIVITY_ICONS[a.id] || Sparkles;
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className="activity-suggest-item"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setSelectedActivity(a.id);
+                        setActivityQuery(a.label);
+                        setActivitySuggestOpen(false);
+                      }}
+                    >
+                      <span className="activity-suggest-icon" style={{ background: a.color }}>
+                        <Icon size={13} color="#1C1E21" />
+                      </span>
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="rezo-zone-input">
+            <MapPin size={14} color="var(--muted)" />
+            <input
+              placeholder="Filtrer par zone…"
+              value={zoneQuery}
+              onChange={(e) => setZoneQuery(e.target.value)}
             />
           </div>
-        )}
-        */}
+        </div>
 
-        <button className={`filters-toggle ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen(true)}>
-          <SlidersHorizontal size={13} />
-          Filtres
-          {activeFilterCount > 0 && <span className="filters-badge">{activeFilterCount}</span>}
+        <button
+          className={`geo-btn full ${userCoords ? 'active' : ''}`}
+          onClick={userCoords ? disableLocation : requestLocation}
+          disabled={locating}
+        >
+          {locating ? <Loader2 size={13} className="spin" /> : <Navigation size={13} />}
+          {userCoords ? '📍 Position activée' : locating ? 'Localisation…' : 'Activer ma position'}
         </button>
       </div>
-        {false && locationError && (
+        {locationError && (
           <div className="geo-error">
             {locationError}
             <div className="manual-geo">
@@ -1665,12 +2766,94 @@ export default function RezoApp() {
           </div>
         )}
 
+      {recommended.length > 0 && (
+        <div className="recommended-wrap">
+          <div className="recommended-title">
+            <Heart size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} fill="var(--amber)" color="var(--amber)" />
+            Recommandé pour toi
+          </div>
+          <div className="recommended-scroll">
+            {recommended.map((m) => {
+              const color = activityById(m.activity).color;
+              return (
+                <button
+                  key={m.id}
+                  className="recommended-card"
+                  onClick={() => setSelectedActivity(m.activity)}
+                >
+                  <span className="swatch" style={{ background: color }}></span>
+                  <div className="recommended-card-title">{m.title}</div>
+                  <div className="recommended-card-meta">
+                    {m.zone || 'Zone non précisée'} · {formatWhen(m.datetime)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="rezo-body">
+        {loading ? (
+          <div className="rezo-grid">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div className="skeleton-card" key={i}>
+                <div className="skeleton-line w-title"></div>
+                <div className="skeleton-line w-half"></div>
+                <div className="skeleton-line w-full"></div>
+                <div className="skeleton-line w-third"></div>
+              </div>
+            ))}
+          </div>
+        ) : grouped.length === 0 && nearbyFallback.length === 0 ? (
+          <div className="rezo-empty">
+            <Compass size={38} color="var(--border-strong)" style={{ marginBottom: 10 }} />
+            <div className="rezo-empty-title">Aucune rencontre ici pour l'instant</div>
+            <div>Sois le premier à lancer une activité — choisis une idée pour démarrer en un tap :</div>
+            <div className="quick-templates">
+              {QUICK_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  className="quick-template-card"
+                  onClick={() => requireName(() => { setTemplateDraft(t); setShowCreate(true); })}
+                >
+                  <span className="quick-template-emoji">{t.emoji}</span>
+                  <span className="quick-template-label">{t.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : grouped.length === 0 ? (
+          <div className="rezo-fallback">
+            <div className="rezo-fallback-banner">
+              <Compass size={15} />
+              {zoneQuery.trim() ? `Rien à "${zoneQuery.trim()}" pour l'instant` : 'Rien dans ce rayon pour l’instant'} — voici{' '}
+              {nearbyFallback.length === 1 ? 'la rencontre la plus proche' : `les ${nearbyFallback.length} rencontres les plus proches`} :
+            </div>
+            <div className="rezo-grid">{nearbyFallback.map((m) => renderMeetupCard(m))}</div>
+          </div>
+        ) : (
+          grouped.map((g) => (
+            <div className="rezo-section" key={g.id}>
+              <div className="rezo-section-title">
+                <span className="swatch" style={{ background: g.color }}></span>
+                {g.label} · {g.items.length}
+              </div>
+              <div className="rezo-grid">
+                {g.items.map((m) => renderMeetupCard(m))}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      </div>
+
       {filtersOpen && (
         <div className="sheet-overlay" onClick={() => setFiltersOpen(false)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-handle"></div>
             <div className="sheet-header">
-              <div className="modal-title">Filtres</div>
+              <div className="modal-title"><SlidersHorizontal size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />Filtres</div>
               <button className="modal-close" onClick={() => setFiltersOpen(false)}><X size={18} /></button>
             </div>
 
@@ -1726,6 +2909,44 @@ export default function RezoApp() {
               </div>
             </div>
 
+            <div className="sheet-section">
+              <FieldLabel icon={Cake}>Tranche d'âge</FieldLabel>
+              <div className="age-range-row">
+                <input
+                  type="number"
+                  min={16}
+                  max={99}
+                  value={ageFilterMin}
+                  onChange={(e) => setAgeFilterMin(Math.min(Number(e.target.value) || 16, ageFilterMax))}
+                />
+                <span className="age-range-sep">à</span>
+                <input
+                  type="number"
+                  min={16}
+                  max={99}
+                  value={ageFilterMax}
+                  onChange={(e) => setAgeFilterMax(Math.max(Number(e.target.value) || 99, ageFilterMin))}
+                />
+                <span className="age-range-sep">ans</span>
+              </div>
+            </div>
+
+            {userCoords && (
+              <div className="sheet-section">
+                <FieldLabel icon={Navigation}>Rayon de recherche</FieldLabel>
+                <div className="radius-control">
+                  <input
+                    type="range"
+                    min={1}
+                    max={30}
+                    value={radiusKm}
+                    onChange={(e) => setRadiusKm(Number(e.target.value))}
+                  />
+                  <span>{radiusKm} km</span>
+                </div>
+              </div>
+            )}
+
             <div className="sheet-footer">
               <button className="filters-reset" onClick={resetFilters}>
                 Réinitialiser
@@ -1738,363 +2959,351 @@ export default function RezoApp() {
         </div>
       )}
 
-      {recommended.length > 0 && (
-        <div className="recommended-wrap">
-          <div className="recommended-title">Recommandé pour toi</div>
-          <div className="recommended-scroll">
-            {recommended.map((m) => {
-              const color = activityById(m.activity).color;
-              return (
-                <button
-                  key={m.id}
-                  className="recommended-card"
-                  onClick={() => setSelectedActivity(m.activity)}
-                >
-                  <span className="swatch" style={{ background: color }}></span>
-                  <div className="recommended-card-title">{m.title}</div>
-                  <div className="recommended-card-meta">
-                    {m.zone || 'Zone non précisée'} · {formatWhen(m.datetime)}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="rezo-body">
-        {loading ? (
-          <div className="loading-state">
-            <Loader2 size={16} className="spin" /> Chargement des rencontres…
-          </div>
-        ) : grouped.length === 0 ? (
-          <div className="rezo-empty">
-            <div className="rezo-empty-title">Aucune rencontre ici pour l'instant</div>
-            <div>Sois le premier à lancer une activité dans cette zone.</div>
-          </div>
-        ) : (
-          grouped.map((g) => (
-            <div className="rezo-section" key={g.id}>
-              <div className="rezo-section-title">
-                <span className="swatch" style={{ background: g.color }}></span>
-                {g.label} · {g.items.length}
-              </div>
-              <div className="rezo-grid">
-                {g.items.map((m) => {
-                  const isIn = userName && m.participants.includes(userName);
-                  const isPending = userName && (m.pendingRequests || []).some((r) => r.name === userName);
-                  const audience = m.audience || 'mixte';
-                  const genderBlocked =
-                    !isIn &&
-                    !isPending &&
-                    userGender &&
-                    ((audience === 'femmes' && userGender !== 'femme') ||
-                      (audience === 'hommes' && userGender !== 'homme'));
-                  const isFull = m.participants.length >= m.maxParticipants && !isIn;
-                  const isHost = userName && m.host === userName;
-                  const past = isPast(m);
-                  const pendingRequests = m.pendingRequests || [];
-                  const hostStats = hostRatingStats(m.host);
-                  const satisfactionStats = meetupSatisfactionStats(m);
-                  const alreadyRated = userName && (m.ratings || []).some((r) => r.rater === userName);
-                  const canRate = past && isIn && !isHost && !alreadyRated;
-                  return (
-                    <div className={`card ${past ? 'card-past' : ''}`} key={m.id}>
-                      <div className="card-top">
-                        <div className="card-title">{m.title}</div>
-                        {isHost && (
-                          <div className="card-actions">
-                            <button
-                              className="delete-btn"
-                              title="Modifier"
-                              onClick={() => {
-                                setEditingMeetup(m);
-                                setShowCreate(true);
-                              }}
-                            >
-                              <Pencil size={13} />
-                            </button>
-                            <button className="delete-btn" title="Supprimer" onClick={() => setConfirmDeleteId(m.id)}>
-                              <X size={13} />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      {audience !== 'mixte' && (
-                        <span className={`audience-badge audience-${audience}`}>
-                          {audience === 'femmes' ? '100% Femmes' : '100% Hommes'}
-                        </span>
-                      )}
-                      {m.started && !past && (
-                        <span className="live-badge">
-                          <span className="pulse"></span> En cours
-                        </span>
-                      )}
-                      <div className="card-meta">
-                        <div className="card-meta-row">
-                          <MapPin size={12} /> {m.location ? `${m.location} · ${m.zone || ''}` : m.zone || 'Zone non précisée'}
-                          {m._distance !== null && <span style={{ color: 'var(--live)' }}> · {formatDistance(m._distance)}</span>}
-                        </div>
-                        {mapsLinkFor(m) && (
-                          <a
-                            className="maps-link"
-                            href={mapsLinkFor(m)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ExternalLink size={11} /> Voir sur la carte
-                          </a>
-                        )}
-                        <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime)}{past && ' · Terminée'}</div>
-                        <div className="card-meta-row">
-                          Organisé par {m.host}{isHost ? ' (toi)' : ''}
-                          {hostStats && <StarDisplay value={hostStats.avg} count={hostStats.count} size={11} />}
-                        </div>
-                        {satisfactionStats && (
-                          <div className="card-meta-row">
-                            Satisfaction <StarDisplay value={satisfactionStats.avg} count={satisfactionStats.count} size={11} />
-                          </div>
-                        )}
-                      </div>
-                      {m.note && <div className="card-note">{m.note}</div>}
-                      <div className="avatars">
-                        {m.participants.slice(0, 6).map((p) => (
-                          <Avatar key={p} name={p} avatarUrl={profilesMap[p]} size={22} />
-                        ))}
-                        {m.participants.length > 6 && <span className="avatar more">+{m.participants.length - 6}</span>}
-                      </div>
-
-                      {isHost && pendingRequests.length > 0 && (
-                        <div className="pending-box">
-                          <div className="pending-title">
-                            {pendingRequests.length} demande{pendingRequests.length > 1 ? 's' : ''} en attente
-                          </div>
-                          {pendingRequests.map((r) => (
-                            <div className="pending-row" key={r.name}>
-                              <span>
-                                {r.name}
-                                {r.invitedBy && <span className="pending-invited-by"> · invité·e par {r.invitedBy}</span>}
-                              </span>
-                              <div className="pending-actions">
-                                <button
-                                  className="pending-accept"
-                                  title="Accepter"
-                                  onClick={() => respondToRequest(m, r.name, true)}
-                                >
-                                  <Check size={13} />
-                                </button>
-                                <button
-                                  className="pending-reject"
-                                  title="Refuser"
-                                  onClick={() => respondToRequest(m, r.name, false)}
-                                >
-                                  <X size={13} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="card-footer">
-                        <div className="card-count">
-                          <Users size={12} /> {m.participants.length}/{m.maxParticipants}
-                        </div>
-                        <div className="footer-actions">
-                          {!isHost && (
-                            <button
-                              className="chat-icon-btn"
-                              title="Signaler cette rencontre"
-                              onClick={() => setReportingMeetup(m)}
-                            >
-                              <Flag size={13} />
-                            </button>
-                          )}
-                          <button
-                            className="chat-icon-btn"
-                            disabled={!isIn && !isHost}
-                            title={isIn || isHost ? 'Discussion du groupe' : 'Réservé aux membres acceptés'}
-                            onClick={() => openChat(m)}
-                          >
-                            <MessageCircle size={14} />
-                          </button>
-                          {(isIn || isHost) && (
-                            <button
-                              className="chat-icon-btn"
-                              title="Inviter des amis"
-                              onClick={() => {
-                                setInvitingMeetup(m);
-                                setInviteNameDraft('');
-                              }}
-                            >
-                              <UserPlus size={14} />
-                            </button>
-                          )}
-                          {isHost && !m.started && !past && (
-                            <button className="rate-btn" title="Démarrer la rencontre" onClick={() => startMeetup(m)}>
-                              <Radio size={13} />
-                              Démarrer
-                            </button>
-                          )}
-                          {m.started && (isIn || isHost) && (
-                            <button
-                              className="chat-icon-btn live-btn"
-                              title="Mon trajet vers la rencontre"
-                              onClick={() => {
-                                setJourneyMeetupId(m.id);
-                                setJourneyError(null);
-                              }}
-                            >
-                              <Navigation size={14} />
-                              {Object.keys(m.arrivals || {}).length > 0 && (
-                                <span className="arrivals-count">{Object.keys(m.arrivals || {}).length}</span>
-                              )}
-                            </button>
-                          )}
-                          {canRate && (
-                            <button
-                              className="rate-btn"
-                              onClick={() => {
-                                setRatingMeetup(m);
-                                setRatingHostStars(0);
-                                setRatingSatisfactionStars(0);
-                              }}
-                            >
-                              <Star size={13} />
-                              Noter
-                            </button>
-                          )}
-                          <button
-                            className={`join-btn ${
-                              isFull || genderBlocked ? 'full' : isIn ? 'leave' : isPending ? 'pending' : 'join'
-                            }`}
-                            disabled={isFull || genderBlocked}
-                            title={genderBlocked ? `Réservé ${audience === 'femmes' ? 'aux femmes' : 'aux hommes'}` : undefined}
-                            onClick={() => requestOrLeave(m)}
-                          >
-                            {isIn
-                              ? 'Quitter'
-                              : isPending
-                              ? 'Annuler la demande'
-                              : isFull
-                              ? 'Complet'
-                              : genderBlocked
-                              ? 'Non éligible'
-                              : 'Demander à rejoindre'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      <button className="fab" onClick={() => requireName(() => setShowCreate(true))} aria-label="Créer une rencontre">
-        <Plus size={22} />
-      </button>
+      <nav className="bottom-nav">
+        <button
+          className={`bottom-nav-item ${!mineOnly ? 'active' : ''}`}
+          onClick={() => setMineOnly(false)}
+        >
+          <Home size={20} />
+          <span>Découvrir</span>
+        </button>
+        <button
+          className={`bottom-nav-item ${mineOnly ? 'active' : ''}`}
+          onClick={() => setMineOnly(true)}
+        >
+          <Bookmark size={20} />
+          <span>Mes sorties</span>
+        </button>
+        <button
+          className="bottom-nav-center"
+          onClick={() => requireName(() => setShowCreate(true))}
+          aria-label="Créer une rencontre"
+        >
+          <Plus size={24} />
+        </button>
+        <button
+          className={`bottom-nav-item ${filtersOpen ? 'active' : ''}`}
+          onClick={() => setFiltersOpen(true)}
+        >
+          <SlidersHorizontal size={20} />
+          <span>Filtres</span>
+          {activeFilterCount > 0 && <span className="bottom-nav-badge">{activeFilterCount}</span>}
+        </button>
+        <button
+          className={`bottom-nav-item ${showNameModal || showAuthModal ? 'active' : ''}`}
+          onClick={openProfile}
+        >
+          {userName ? <Avatar name={userName} avatarUrl={userAvatar} size={22} /> : <User size={20} />}
+          <span>Profil</span>
+          {badgeUnlocked && <span className="bottom-nav-badge">{monthlyCount}</span>}
+        </button>
+      </nav>
 
       {showCreate && (
         <CreateModal
           onClose={() => {
             setShowCreate(false);
             setEditingMeetup(null);
+            setTemplateDraft(null);
           }}
           onSubmit={handleCreate}
           saving={saving}
           userCoords={userCoords}
           userGender={userGender}
           initial={editingMeetup}
+          template={templateDraft}
+          defaultZone={zoneQuery}
         />
+      )}
+
+      {showAuthModal && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title">
+                <Lock size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
+                {authMode === 'signup' ? 'Créer un compte' : 'Se connecter'}
+              </div>
+              <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
+            </div>
+
+            <div className="auth-intro">
+              {authMode === 'signup'
+                ? 'Crée ton compte REZO pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.'
+                : 'Connecte-toi avec ton e-mail et ton mot de passe pour continuer.'}
+            </div>
+
+            <div className="field">
+              <label>Adresse e-mail</label>
+              <div className="input-with-icon">
+                <Mail size={14} color="var(--muted)" />
+                <input
+                  type="email"
+                  autoFocus
+                  autoComplete="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="toi@exemple.com"
+                  onKeyDown={(e) => e.key === 'Enter' && (authMode === 'signup' ? submitSignup() : submitLogin())}
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Mot de passe</label>
+              <div className="input-with-icon">
+                <Lock size={14} color="var(--muted)" />
+                <input
+                  type={authShowPassword ? 'text' : 'password'}
+                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Au moins 6 caractères"
+                  onKeyDown={(e) => e.key === 'Enter' && authMode === 'login' && submitLogin()}
+                />
+                <button
+                  type="button"
+                  className="input-icon-btn"
+                  onClick={() => setAuthShowPassword((v) => !v)}
+                  aria-label={authShowPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                >
+                  {authShowPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+            </div>
+
+            {authMode === 'signup' && (
+              <div className="field">
+                <label>Confirmer le mot de passe</label>
+                <div className={`input-with-icon ${authConfirm && authConfirm !== authPassword ? 'mismatch' : ''}`}>
+                  <Lock size={14} color="var(--muted)" />
+                  <input
+                    type={authShowPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={authConfirm}
+                    onChange={(e) => setAuthConfirm(e.target.value)}
+                    placeholder="Retape ton mot de passe"
+                    onKeyDown={(e) => e.key === 'Enter' && submitSignup()}
+                  />
+                </div>
+                {authConfirm && authConfirm !== authPassword && (
+                  <span style={{ fontSize: 11, color: 'var(--amber)' }}>Les mots de passe ne correspondent pas.</span>
+                )}
+              </div>
+            )}
+
+            {authError && (
+              <div className="auth-error" role="alert">
+                {authError}
+              </div>
+            )}
+
+            <button
+              className="modal-submit"
+              disabled={
+                authSubmitting ||
+                !authEmail.trim() ||
+                !authPassword ||
+                (authMode === 'signup' && !authConfirm)
+              }
+              onClick={authMode === 'signup' ? submitSignup : submitLogin}
+            >
+              {authSubmitting ? 'Patiente…' : authMode === 'signup' ? 'Créer mon compte' : 'Se connecter'}
+            </button>
+
+            <button
+              type="button"
+              className="auth-switch-btn"
+              onClick={() => {
+                setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'));
+                setAuthError(null);
+              }}
+            >
+              {authMode === 'signup' ? 'Déjà un compte ? Se connecter' : "Pas encore de compte ? S'inscrire"}
+            </button>
+          </div>
+        </div>
       )}
 
       {showNameModal && (
         <div className="modal-overlay">
-          <div className="modal">
-            <div className="modal-header">
-              <div className="modal-title">Ton profil</div>
-              <button className="modal-close" onClick={() => setShowNameModal(false)}><X size={18} /></button>
-            </div>
-            <div className="field">
-              <label>Photo de profil (optionnel)</label>
-              <div className="avatar-picker">
-                <Avatar
-                  name={nameDraft || userName || '?'}
-                  avatarUrl={avatarDraft !== null ? avatarDraft : userAvatar}
-                  size={52}
-                />
-                <label className="avatar-upload-btn">
-                  {avatarProcessing ? 'Traitement…' : 'Choisir une photo'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => handleAvatarFile(e.target.files && e.target.files[0])}
-                  />
-                </label>
-                {(avatarDraft || userAvatar) && (
-                  <button
-                    type="button"
-                    className="avatar-remove-btn"
-                    onClick={() => setAvatarDraft('')}
-                  >
-                    Retirer
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="field">
-              <label>Ton prénom ou pseudo</label>
-              <input
-                autoFocus
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                placeholder="Ex: Yassine"
-              />
-            </div>
-            <div className="field">
-              <label>Sexe *</label>
-              <div className="gender-options">
-                {GENDER_OPTIONS.map((g) => (
-                  <button
-                    key={g.id}
-                    type="button"
-                    className={`gender-btn ${genderDraft === g.id ? 'active' : ''}`}
-                    onClick={() => setGenderDraft(g.id)}
-                  >
-                    {g.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="field">
-              <label>Activités qui t'intéressent * (au moins une)</label>
-              <div className="pref-options">
-                {ACTIVITIES.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`pref-chip ${preferencesDraft.includes(a.id) ? 'active' : ''}`}
-                    onClick={() => togglePreference(a.id)}
-                  >
-                    <span className="swatch" style={{ background: a.color }}></span>
-                    {a.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button
-              className="modal-submit"
-              disabled={!nameDraft.trim() || !genderDraft || preferencesDraft.length === 0}
-              onClick={confirmName}
-            >
-              <Check size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-              Continuer
+          <div className="modal profile-modal">
+            <button className="modal-close profile-modal-close" onClick={() => setShowNameModal(false)}>
+              <X size={16} />
             </button>
+
+            <div className="profile-cover"></div>
+            <div className="profile-avatar-wrap">
+              <Avatar
+                name={nameDraft || userName || '?'}
+                avatarUrl={avatarDraft !== null ? avatarDraft : userAvatar}
+                size={84}
+              />
+              <label className="profile-avatar-edit-btn" title="Changer la photo">
+                {avatarProcessing ? <Loader2 size={13} className="spin" /> : <Camera size={13} />}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleAvatarFile(e.target.files && e.target.files[0])}
+                />
+              </label>
+            </div>
+            {(avatarDraft || userAvatar) && (
+              <button type="button" className="avatar-remove-btn profile-avatar-remove" onClick={() => setAvatarDraft('')}>
+                Retirer la photo
+              </button>
+            )}
+
+            <div className="profile-modal-body">
+              {userEmail && <div className="auth-connected-as" style={{ margin: '0 auto 14px' }}>Connecté avec {userEmail}</div>}
+
+              {userName && monthlyCount > 0 && (
+                <div className={`streak-card ${badgeUnlocked ? 'unlocked' : ''}`}>
+                  {badgeUnlocked ? <Award size={18} /> : <Flame size={18} />}
+                  <div>
+                    <div className="streak-card-title">
+                      {monthlyCount} rencontre{monthlyCount > 1 ? 's' : ''} ce mois-ci
+                    </div>
+                    <div className="streak-card-subtitle">
+                      {badgeUnlocked
+                        ? 'Badge débloqué, continue comme ça !'
+                        : `Encore ${BADGE_THRESHOLD - monthlyCount} pour débloquer le badge`}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isPushSupported() && userEmail && (
+                <div className="switch-row push-toggle-row">
+                  <div>
+                    <div className="switch-title">
+                      {pushEnabled ? <Bell size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} /> : <BellOff size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />}
+                      Notifications push
+                    </div>
+                    <div className="switch-subtitle">Demandes, acceptations, arrivées — en temps réel</div>
+                  </div>
+                  <button
+                    className={`switch ${pushEnabled ? 'on' : ''}`}
+                    role="switch"
+                    aria-checked={pushEnabled}
+                    disabled={pushBusy}
+                    onClick={togglePush}
+                  >
+                    <span className="switch-knob"></span>
+                  </button>
+                </div>
+              )}
+
+              <div className="field">
+                <FieldLabel icon={User}>Ton prénom ou pseudo</FieldLabel>
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  placeholder="Ex: Yassine"
+                />
+              </div>
+
+              <div className="field">
+                <FieldLabel icon={Phone}>Numéro de téléphone (optionnel)</FieldLabel>
+                <div className="phone-verify-row">
+                  <input
+                    type="tel"
+                    value={phoneDraft}
+                    onChange={(e) => onPhoneDraftChange(e.target.value)}
+                    placeholder="Ex: 06 12 34 56 78"
+                  />
+                  {phoneVerifiedDraft ? (
+                    <span className="verified-pill">
+                      <ShieldCheck size={13} /> Vérifié
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="avatar-upload-btn"
+                      disabled={!phoneDraft.trim() || verifyBusy}
+                      onClick={requestPhoneVerification}
+                    >
+                      {verifyBusy && !verifyCodeSent ? 'Envoi…' : 'Vérifier'}
+                    </button>
+                  )}
+                </div>
+                {verifyCodeSent && !phoneVerifiedDraft && (
+                  <div className="verify-code-box">
+                    <div className="verify-code-hint">
+                      Code de démo (SMS non branché) : <strong>{verifyDevCode}</strong>
+                    </div>
+                    <div className="phone-verify-row">
+                      <input
+                        value={verifyCodeInput}
+                        onChange={(e) => setVerifyCodeInput(e.target.value)}
+                        placeholder="Code à 6 chiffres"
+                        maxLength={6}
+                      />
+                      <button
+                        type="button"
+                        className="avatar-upload-btn"
+                        disabled={!verifyCodeInput.trim() || verifyBusy}
+                        onClick={confirmPhoneVerification}
+                      >
+                        {verifyBusy ? '…' : 'Confirmer'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  Un numéro vérifié affiche un badge "Vérifié" sur tes rencontres — rassure les
+                  autres membres, surtout pour les rencontres 100% Femmes/Hommes.
+                </span>
+              </div>
+
+              <div className="field">
+                <label>Sexe *</label>
+                <div className="gender-options">
+                  {GENDER_OPTIONS.map((g) => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      className={`gender-btn ${genderDraft === g.id ? 'active' : ''}`}
+                      onClick={() => setGenderDraft(g.id)}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="field">
+                <label>Activités qui t'intéressent * (au moins une)</label>
+                <div className="pref-options">
+                  {ACTIVITIES.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className={`pref-chip ${preferencesDraft.includes(a.id) ? 'active' : ''}`}
+                      onClick={() => togglePreference(a.id)}
+                    >
+                      <span className="swatch" style={{ background: a.color }}></span>
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                className="modal-submit"
+                disabled={!nameDraft.trim() || !genderDraft || preferencesDraft.length === 0}
+                onClick={confirmName}
+              >
+                <Check size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                Continuer
+              </button>
+              {userEmail && (
+                <button type="button" className="auth-switch-btn auth-logout-btn" onClick={logout}>
+                  <LogOut size={12} style={{ verticalAlign: '-2px', marginRight: 5 }} />
+                  Se déconnecter
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -2103,7 +3312,7 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title">Supprimer cette rencontre ?</div>
+              <div className="modal-title"><Trash2 size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--danger)' }} />Supprimer cette rencontre ?</div>
               <button className="modal-close" onClick={() => setConfirmDeleteId(null)}><X size={18} /></button>
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
@@ -2117,7 +3326,7 @@ export default function RezoApp() {
               >
                 Annuler
               </button>
-              <button className="modal-submit" onClick={() => deleteMeetup(confirmDeleteId)}>
+              <button className="modal-submit modal-submit-danger" onClick={() => deleteMeetup(confirmDeleteId)}>
                 Supprimer
               </button>
             </div>
@@ -2129,7 +3338,7 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title">Signaler "{reportingMeetup.title}"</div>
+              <div className="modal-title"><Flag size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />Signaler "{reportingMeetup.title}"</div>
               <button className="modal-close" onClick={() => setReportingMeetup(null)}><X size={18} /></button>
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 12.5, marginBottom: 14 }}>
@@ -2155,7 +3364,7 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title">Inviter des amis</div>
+              <div className="modal-title"><UserPlus size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />Inviter des amis</div>
               <button className="modal-close" onClick={() => setInvitingMeetup(null)}><X size={18} /></button>
             </div>
 
@@ -2205,7 +3414,7 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title">Ton avis sur "{ratingMeetup.title}"</div>
+              <div className="modal-title"><Star size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />Ton avis sur "{ratingMeetup.title}"</div>
               <button className="modal-close" onClick={() => setRatingMeetup(null)}><X size={18} /></button>
             </div>
 
@@ -2235,7 +3444,7 @@ export default function RezoApp() {
           <div className="modal live-modal">
             <div className="modal-header">
               <div>
-                <div className="modal-title">Mon trajet</div>
+                <div className="modal-title"><Navigation size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />Mon trajet</div>
                 <div className="chat-subtitle">{journeyMeetup.title}</div>
               </div>
               <button
@@ -2336,7 +3545,7 @@ export default function RezoApp() {
           <div className="modal chat-modal">
             <div className="modal-header">
               <div>
-                <div className="modal-title">{chatMeetup.title}</div>
+                <div className="modal-title"><MessageCircle size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />{chatMeetup.title}</div>
                 <div className="chat-subtitle">
                   {chatMeetup.participants.length} participant{chatMeetup.participants.length > 1 ? 's' : ''}
                 </div>
@@ -2394,19 +3603,22 @@ export default function RezoApp() {
   );
 }
 
-function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initial }) {
+function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initial, template, defaultZone }) {
   const isEditing = !!initial;
-  const [title, setTitle] = useState(initial?.title || '');
-  const [activity, setActivity] = useState(initial?.activity || ACTIVITIES[0].id);
-  const [zone, setZone] = useState(initial?.zone || '');
+  const [title, setTitle] = useState(initial?.title || template?.title || '');
+  const [activity, setActivity] = useState(initial?.activity || template?.activity || ACTIVITIES[0].id);
+  const [zone, setZone] = useState(initial?.zone || defaultZone || '');
   const [location, setLocation] = useState(initial?.location || '');
-  const [datetime, setDatetime] = useState(initial?.datetime || '');
+  const [datetime, setDatetime] = useState(initial?.datetime || (template ? toDatetimeLocalValue(template.when()) : ''));
   const [maxParticipants, setMaxParticipants] = useState(initial?.maxParticipants || 8);
-  const [note, setNote] = useState(initial?.note || '');
+  const [note, setNote] = useState(initial?.note || template?.note || '');
   const [audience, setAudience] = useState(initial?.audience || 'mixte');
+  const [ageMin, setAgeMin] = useState(initial?.ageMin || 18);
+  const [ageMax, setAgeMax] = useState(initial?.ageMax || 99);
   const [useLocation, setUseLocation] = useState(isEditing ? !!initial?.coords : !!userCoords);
 
   const minParticipants = Math.max(2, initial?.participants?.length || 2);
+  const ageRangeValid = Number(ageMin) >= 16 && Number(ageMax) >= Number(ageMin);
 
   // Une femme ne peut proposer que Mixte / 100% Femmes ; un homme que Mixte / 100% Hommes.
   // Sexe inconnu (pas encore renseigné) : les 3 options restent visibles.
@@ -2419,18 +3631,21 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
 
   const isDateChanged = !isEditing || datetime !== initial?.datetime;
   const dateIsFuture = !datetime || !isDateChanged || new Date(datetime).getTime() > Date.now();
-  const canSubmit = title.trim() && zone.trim() && datetime && dateIsFuture;
+  const canSubmit = title.trim() && zone.trim() && datetime && dateIsFuture && ageRangeValid;
 
   return (
     <div className="modal-overlay">
       <div className="modal">
         <div className="modal-header">
-          <div className="modal-title">{isEditing ? 'Modifier la rencontre' : 'Lancer une rencontre'}</div>
+          <div className="modal-title">
+            {isEditing ? <Pencil size={15} style={{ verticalAlign: '-2px', marginRight: 7 }} /> : <Sparkles size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />}
+            {isEditing ? 'Modifier la rencontre' : 'Lancer une rencontre'}
+          </div>
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
 
         <div className="field">
-          <label>Titre</label>
+          <FieldLabel icon={TypeIcon}>Titre</FieldLabel>
           <input
             value={title}
             maxLength={80}
@@ -2440,21 +3655,24 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         </div>
 
         <div className="field">
-          <label>Activité</label>
-          <select value={activity} onChange={(e) => setActivity(e.target.value)}>
-            {ACTIVITIES.map((a) => (
-              <option key={a.id} value={a.id}>{a.label}</option>
-            ))}
-          </select>
+          <FieldLabel>Activité</FieldLabel>
+          <div className="select-with-swatch">
+            <span className="swatch" style={{ background: activityById(activity).color }}></span>
+            <select value={activity} onChange={(e) => setActivity(e.target.value)}>
+              {ACTIVITIES.map((a) => (
+                <option key={a.id} value={a.id}>{a.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="field">
-          <label>Zone géographique</label>
+          <FieldLabel icon={MapPin}>Zone géographique</FieldLabel>
           <input value={zone} onChange={(e) => setZone(e.target.value)} placeholder="Ex: Maarif, Casablanca" />
         </div>
 
         <div className="field">
-          <label>Lieu précis (optionnel)</label>
+          <FieldLabel icon={Crosshair}>Lieu précis (optionnel)</FieldLabel>
           <input
             value={location}
             maxLength={120}
@@ -2467,7 +3685,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         </div>
 
         <div className="field">
-          <label>Type de rencontre</label>
+          <FieldLabel icon={Users}>Type de rencontre</FieldLabel>
           <div className="gender-options">
             {availableAudiences.map((a) => (
               <button
@@ -2483,6 +3701,35 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
           {!userGender && (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>
               Ton sexe sera demandé à la validation pour confirmer ce choix.
+            </span>
+          )}
+        </div>
+
+        <div className="field">
+          <FieldLabel icon={Cake}>Tranche d'âge des participants</FieldLabel>
+          <div className="age-range-row">
+            <input
+              type="number"
+              min={16}
+              max={99}
+              value={ageMin}
+              onChange={(e) => setAgeMin(e.target.value)}
+              aria-label="Âge minimum"
+            />
+            <span className="age-range-sep">à</span>
+            <input
+              type="number"
+              min={16}
+              max={99}
+              value={ageMax}
+              onChange={(e) => setAgeMax(e.target.value)}
+              aria-label="Âge maximum"
+            />
+            <span className="age-range-sep">ans</span>
+          </div>
+          {!ageRangeValid && (
+            <span style={{ fontSize: 11, color: 'var(--amber)' }}>
+              Âge minimum 16 ans, et l'âge max doit être ≥ à l'âge min.
             </span>
           )}
         </div>
@@ -2503,7 +3750,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         )}
 
         <div className="field">
-          <label>Date et heure</label>
+          <FieldLabel icon={Clock}>Date et heure</FieldLabel>
           <input type="datetime-local" value={datetime} onChange={(e) => setDatetime(e.target.value)} />
           {!dateIsFuture && (
             <span style={{ fontSize: 11, color: 'var(--amber)' }}>La date doit être dans le futur.</span>
@@ -2511,7 +3758,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         </div>
 
         <div className="field">
-          <label>Nombre de places</label>
+          <FieldLabel icon={Users}>Nombre de places</FieldLabel>
           <input
             type="number"
             min={minParticipants}
@@ -2527,7 +3774,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         </div>
 
         <div className="field">
-          <label>Détails (optionnel)</label>
+          <FieldLabel icon={AlignLeft}>Détails (optionnel)</FieldLabel>
           <textarea
             value={note}
             maxLength={300}
@@ -2539,7 +3786,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         <button
           className="modal-submit"
           disabled={!canSubmit || saving}
-          onClick={() => onSubmit({ title, activity, zone, location, datetime, maxParticipants, note, useLocation, audience })}
+          onClick={() => onSubmit({ title, activity, zone, location, datetime, maxParticipants, note, useLocation, audience, ageMin, ageMax })}
         >
           {saving ? 'Enregistrement…' : isEditing ? 'Enregistrer les modifications' : 'Créer la rencontre'}
         </button>

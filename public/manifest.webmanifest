@@ -1,0 +1,15 @@
+{
+  "name": "REZO · Rencontres par activité",
+  "short_name": "REZO",
+  "description": "Trouve et organise des rencontres par activité, près de toi, à l'instant.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F0F2F5",
+  "theme_color": "#F0F2F5",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

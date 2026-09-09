@@ -1,25 +1,34 @@
 /**
  * Polyfill de window.storage pour le développement local hors de Claude.ai.
  *
- * L'app RÉZO a été prototypée comme un artefact Claude, où `window.storage`
+ * L'app REZO a été prototypée comme un artefact Claude, où `window.storage`
  * est fourni nativement par la plateforme et synchronise les données entre
  * TOUS les utilisateurs qui ouvrent l'artefact (stockage "shared: true").
  *
- * En dehors de cet environnement, il n'existe pas de backend réel : ce
- * polyfill réimplémente la même API (get/set/delete/list, avec le même
- * comportement — get sur une clé absente lève une erreur) mais en la
- * stockant dans le localStorage du navigateur.
+ * Ce polyfill réimplémente la même API (get/set/delete/list, avec le même
+ * comportement — get sur une clé absente lève une erreur), mais avec deux
+ * backends différents selon le paramètre `shared` :
  *
- * ⚠️ LIMITE IMPORTANTE : localStorage est local à CE navigateur. Les données
- * "shared" ne seront donc visibles que dans les autres onglets du même
- * navigateur, PAS entre deux utilisateurs sur deux appareils différents.
- * C'est suffisant pour développer et tester l'UI en solo, mais pour une
- * vraie mise en production multi-utilisateurs (ce qui est tout l'intérêt de
- * cette app), il faut remplacer ce fichier par un vrai backend partagé :
- * Firebase Realtime Database / Firestore, Supabase, ou une API custom.
- * Le reste du code (App.jsx) n'a besoin d'aucune modification pour ça :
- * il suffit de garder la même signature get/set/delete/list.
+ * - `shared: false` (données propres à CET appareil : session, préférences
+ *   locales) → `localStorage`, comme avant. Ça reste correct : ces valeurs
+ *   ne représentent pas des données à synchroniser entre appareils, juste un
+ *   cache local (le profil complet, lui, est aussi dupliqué dans le registre
+ *   partagé `accounts` — voir App.jsx — pour être restauré à la connexion).
+ *
+ * - `shared: true` (rencontres, comptes, profils, chat…) → **Firestore**
+ *   directement depuis le client (voir `src/lib/firebase.js`), dans une
+ *   collection `kv` où chaque document = une clé (même forme que l'ancien
+ *   backend Express, juste un hébergeur différent). Géré par Firebase, donc
+ *   synchronisé entre TOUS les appareils sans rien déployer soi-même.
+ *
+ * Le petit serveur Express (`server/index.js`) reste utile pour les
+ * opérations qui doivent rester côté serveur (notifications push, code de
+ * vérification téléphone, résumé hebdomadaire planifié) — voir README.md.
+ * Il lit/écrit dans la MÊME collection Firestore via `server/firebaseClient.js`.
  */
+
+import { db } from './firebase.js';
+import { doc, getDoc, setDoc, deleteDoc, collection, query, orderBy, startAt, endAt, getDocs, documentId } from 'firebase/firestore';
 
 const NAMESPACE = 'rezo:data';
 
@@ -35,8 +44,29 @@ function writeAll(data) {
   localStorage.setItem(NAMESPACE, JSON.stringify(data));
 }
 
-function scopeKey(shared) {
-  return shared ? 'shared' : 'personal';
+async function firestoreGet(key) {
+  const snap = await getDoc(doc(db, 'kv', key));
+  if (!snap.exists()) {
+    throw new Error(`Key not found: ${key}`);
+  }
+  return snap.data().value;
+}
+
+async function firestoreSet(key, value) {
+  await setDoc(doc(db, 'kv', key), { value });
+}
+
+async function firestoreDelete(key) {
+  await deleteDoc(doc(db, 'kv', key));
+}
+
+async function firestoreList(prefix) {
+  const col = collection(db, 'kv');
+  const q = prefix
+    ? query(col, orderBy(documentId()), startAt(prefix), endAt(prefix + ''))
+    : query(col);
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.id);
 }
 
 export function installStoragePolyfill() {
@@ -45,35 +75,47 @@ export function installStoragePolyfill() {
 
   window.storage = {
     async get(key, shared = false) {
+      if (shared) {
+        const value = await firestoreGet(key);
+        return { key, value, shared };
+      }
       const data = readAll();
-      const scope = scopeKey(shared);
-      if (!data[scope] || !(key in data[scope])) {
+      if (!data.personal || !(key in data.personal)) {
         throw new Error(`Key not found: ${key}`);
       }
-      return { key, value: data[scope][key], shared };
+      return { key, value: data.personal[key], shared };
     },
 
     async set(key, value, shared = false) {
+      if (shared) {
+        await firestoreSet(key, value);
+        return { key, value, shared };
+      }
       const data = readAll();
-      const scope = scopeKey(shared);
-      if (!data[scope]) data[scope] = {};
-      data[scope][key] = value;
+      if (!data.personal) data.personal = {};
+      data.personal[key] = value;
       writeAll(data);
       return { key, value, shared };
     },
 
     async delete(key, shared = false) {
+      if (shared) {
+        await firestoreDelete(key);
+        return { key, deleted: true, shared };
+      }
       const data = readAll();
-      const scope = scopeKey(shared);
-      if (data[scope]) delete data[scope][key];
+      if (data.personal) delete data.personal[key];
       writeAll(data);
       return { key, deleted: true, shared };
     },
 
     async list(prefix = '', shared = false) {
+      if (shared) {
+        const keys = await firestoreList(prefix);
+        return { keys, prefix, shared };
+      }
       const data = readAll();
-      const scope = scopeKey(shared);
-      const keys = data[scope] ? Object.keys(data[scope]).filter((k) => k.startsWith(prefix)) : [];
+      const keys = data.personal ? Object.keys(data.personal).filter((k) => k.startsWith(prefix)) : [];
       return { keys, prefix, shared };
     },
   };
