@@ -56,6 +56,19 @@ const ACTIVITY_ICONS = {
 
 const activityById = (id) => ACTIVITIES.find((a) => a.id === id) || ACTIVITIES[ACTIVITIES.length - 1];
 
+// Assombrit (ou éclaircit si négatif) une couleur hex de `percent`% — sert à composer un dégradé
+// à deux tons à partir de la seule couleur d'activité, pour une bannière qui ait un peu de relief
+// plutôt qu'un aplat plat.
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const amt = Math.round(2.55 * percent);
+  const clamp = (v) => Math.max(0, Math.min(255, v));
+  const r = clamp((num >> 16) + amt);
+  const g = clamp(((num >> 8) & 0x00ff) + amt);
+  const b = clamp((num & 0x0000ff) + amt);
+  return `#${(0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1)}`;
+}
+
 const MOROCCO_PRESETS = [
   { label: 'Casablanca centre', coords: { lat: 33.5731, lng: -7.5898 } },
   { label: 'Rabat', coords: { lat: 34.0209, lng: -6.8416 } },
@@ -134,6 +147,13 @@ const AUDIENCE_OPTIONS = [
 ];
 
 const BADGE_THRESHOLD = 3;
+
+// Nom du compte utilisé par le script de contenu de démarrage (voir server/seed.js). Ce n'est PAS
+// un vrai compte connectable : personne ne peut donc jamais accepter de demandes ni démarrer ces
+// rencontres via le chemin normal (réservé à l'hôte). On adapte ces deux actions spécifiquement
+// pour ces rencontres-là afin qu'elles restent utilisables : adhésion immédiate (pas de validation
+// à attendre d'un hôte qui n'existe pas) et démarrage ouvert à tout participant une fois complètes.
+const REZO_HOST_NAME = 'Équipe REZO';
 
 const REPORT_REASONS = [
   'Spam ou publicité',
@@ -1099,6 +1119,23 @@ export default function RezoApp() {
         return;
       }
 
+      // Rencontres "Équipe REZO" (contenu de démarrage) : pas de vrai hôte connectable pour valider
+      // les demandes, donc adhésion immédiate plutôt que de rester bloqué en attente pour toujours.
+      if (meetup.host === REZO_HOST_NAME) {
+        const updated = meetups.map((m) =>
+          m.id === meetup.id
+            ? {
+                ...m,
+                participants: [...m.participants, name],
+                participantGenders: { ...(m.participantGenders || {}), [name]: gender },
+              }
+            : m
+        );
+        await saveMeetups(updated);
+        showToast('Tu as rejoint la rencontre !');
+        return;
+      }
+
       const updated = meetups.map((m) =>
         m.id === meetup.id
           ? {
@@ -1568,9 +1605,15 @@ export default function RezoApp() {
         (audience === 'hommes' && userGender !== 'homme'));
     const isFull = m.participants.length >= m.maxParticipants && !isIn;
     const isHost = userName && m.host === userName;
+    // Rencontre "Équipe REZO" (pas de vrai hôte connectable) : une fois complète, n'importe quel
+    // participant peut la démarrer plutôt que d'attendre un hôte qui ne se connectera jamais.
+    const canStartAsRezoParticipant =
+      !isHost && m.host === REZO_HOST_NAME && isIn && m.participants.length >= m.maxParticipants;
     const hostVerified = !!verifiedMap[m.host];
-    const alreadyMetHost = !isHost && knownPeople.has(m.host);
-    const mutualCount = !isHost && !alreadyMetHost
+    // Inutile de signaler "déjà rencontré"/"amis en commun" pour une rencontre qu'on a déjà
+    // rejointe (forcément vrai puisqu'on y est) — seulement utile pour décider de rejoindre.
+    const alreadyMetHost = !isHost && !isIn && knownPeople.has(m.host);
+    const mutualCount = !isHost && !isIn && !alreadyMetHost
       ? m.participants.filter((p) => p !== userName && knownPeople.has(p)).length
       : 0;
     const past = isPast(m);
@@ -1579,12 +1622,18 @@ export default function RezoApp() {
     const satisfactionStats = meetupSatisfactionStats(m);
     const alreadyRated = userName && (m.ratings || []).some((r) => r.rater === userName);
     const canRate = past && isIn && !isHost && !alreadyRated;
+    const activityInfo = activityById(m.activity);
+    const ActivityIcon = ACTIVITY_ICONS[m.activity] || Sparkles;
     return (
-      <div
-        className={`card ${past ? 'card-past' : ''}`}
-        key={m.id}
-        style={{ '--card-accent': activityById(m.activity).color }}
-      >
+      <div className={`card ${past ? 'card-past' : ''}`} key={m.id}>
+        <div
+          className="card-banner"
+          style={{ background: `linear-gradient(135deg, ${activityInfo.color}, ${shadeColor(activityInfo.color, -30)})` }}
+        >
+          <ActivityIcon size={44} className="card-banner-icon" />
+          <span className="card-banner-label">{activityInfo.label}</span>
+        </div>
+        <div className="card-body">
         <div className="card-top">
           <div className="card-top-left">
             <div className="card-title">{m.title}</div>
@@ -1738,7 +1787,7 @@ export default function RezoApp() {
                 <UserPlus size={14} />
               </button>
             )}
-            {isHost && !m.started && !past && (
+            {(isHost || canStartAsRezoParticipant) && !m.started && !past && (
               <button className="rate-btn" title="Démarrer la rencontre" onClick={() => startMeetup(m)}>
                 <Radio size={13} />
                 Démarrer
@@ -1791,6 +1840,7 @@ export default function RezoApp() {
                 : 'Demander à rejoindre'}
             </button>
           </div>
+        </div>
         </div>
       </div>
     );
@@ -2154,13 +2204,25 @@ export default function RezoApp() {
         .card {
           background: var(--card);
           border: 1px solid var(--border);
-          border-left: 3px solid var(--card-accent, transparent);
           border-radius: 12px;
-          padding: 14px;
-          display: flex; flex-direction: column; gap: 10px;
+          overflow: hidden;
           box-shadow: 0 1px 2px rgba(0,0,0,0.06);
         }
         .card:hover { border-color: var(--border-strong); background: var(--card-hover); box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
+        .card-banner {
+          position: relative;
+          height: 92px;
+          display: flex; align-items: center; justify-content: center;
+          flex-direction: column; gap: 4px;
+          overflow: hidden;
+        }
+        .card-banner-icon { color: rgba(255,255,255,0.55); }
+        .card-banner-label {
+          font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 11px;
+          letter-spacing: 0.04em; text-transform: uppercase; color: rgba(255,255,255,0.85);
+          text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+        .card-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
         .card-title { font-weight: 600; font-size: 14.5px; line-height: 1.3; }
         .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
         .card-top-left { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
