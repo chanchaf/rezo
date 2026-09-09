@@ -148,6 +148,27 @@ const AUDIENCE_OPTIONS = [
 
 const BADGE_THRESHOLD = 3;
 
+// Délai après l'heure prévue avant de demander à l'organisateur si la rencontre est toujours en
+// cours, et avant d'inviter les participants à laisser un avis si personne n'a répondu.
+const MEETUP_CHECKIN_DELAY_MS = 30 * 60 * 1000;
+
+// Horodatage auquel on pose la question "toujours en cours ?" à l'organisateur.
+function meetupCheckinDueAt(m) {
+  const start = new Date(m.datetime).getTime();
+  if (isNaN(start)) return null;
+  return start + MEETUP_CHECKIN_DELAY_MS;
+}
+
+// Un avis n'est pertinent qu'une fois la rencontre réellement terminée : soit l'organisateur l'a
+// clôturée, soit elle a été démarrée et le délai de vérification est dépassé sans réponse (on ne
+// bloque pas les participants indéfiniment si l'organisateur ne répond jamais).
+function isRatingDue(m, now) {
+  if (m.closed) return true;
+  if (!m.started) return false;
+  const dueAt = meetupCheckinDueAt(m);
+  return dueAt !== null && now >= dueAt;
+}
+
 // Nom du compte utilisé par le script de contenu de démarrage (voir server/seed.js). Ce n'est PAS
 // un vrai compte connectable : personne ne peut donc jamais accepter de demandes ni démarrer ces
 // rencontres via le chemin normal (réservé à l'hôte). On adapte ces deux actions spécifiquement
@@ -436,6 +457,9 @@ export default function RezoApp() {
   const [ratingMeetup, setRatingMeetup] = useState(null);
   const [ratingHostStars, setRatingHostStars] = useState(0);
   const [ratingSatisfactionStars, setRatingSatisfactionStars] = useState(0);
+  const [dismissedRatingIds, setDismissedRatingIds] = useState(new Set());
+  const [ongoingCheckMeetup, setOngoingCheckMeetup] = useState(null);
+  const [now, setNow] = useState(() => Date.now());
   const [journeyMeetupId, setJourneyMeetupId] = useState(null);
   const [journeyActive, setJourneyActive] = useState(false);
   const [journeyError, setJourneyError] = useState(null);
@@ -638,6 +662,9 @@ export default function RezoApp() {
   // Une raison de revenir même sans notification.
   const monthlyCount = userName
     ? meetups.filter((m) => {
+        // Le badge récompense une participation réelle : seules les rencontres réellement
+        // clôturées comptent, jamais une simple inscription ou création (voir closeMeetupNow).
+        if (!m.closed) return false;
         if (!(m.host === userName || m.participants.includes(userName))) return false;
         const d = new Date(m.datetime);
         const now = new Date();
@@ -663,6 +690,60 @@ export default function RezoApp() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [badgeUnlocked, userName]);
+
+  // Horloge légère : force un nouveau rendu périodique pour que les éléments dépendant de l'heure
+  // (bouton "Démarrer" qui apparaît à l'heure prévue, relance "toujours en cours ?") se mettent à
+  // jour sans attendre une action de l'utilisateur.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 20000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Avis déjà écartés par l'utilisateur (par appareil) : évite de rouvrir la fenêtre de notation
+  // en boucle après un "Plus tard" alors que le bouton "Noter" reste disponible manuellement.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get('rezo-rating-dismissed', false);
+        if (res && res.value) setDismissedRatingIds(new Set(JSON.parse(res.value)));
+      } catch (err) {
+        // rien d'écarté pour l'instant, comportement par défaut
+      }
+    })();
+  }, []);
+
+  // 30 min après l'heure prévue, on demande à l'organisateur si sa rencontre est toujours en
+  // cours (voir confirmStillOngoing / closeMeetupNow), tant qu'il n'a pas répondu ou que le délai
+  // de report n'est pas écoulé.
+  useEffect(() => {
+    if (!userName || ongoingCheckMeetup) return;
+    const due = meetups.find((m) => {
+      if (m.host !== userName || !m.started || m.closed) return false;
+      const dueAt = meetupCheckinDueAt(m);
+      if (dueAt === null || now < dueAt) return false;
+      const deferredUntil = m.ongoingDeferredUntil ? new Date(m.ongoingDeferredUntil).getTime() : 0;
+      return !deferredUntil || now >= deferredUntil;
+    });
+    if (due) setOngoingCheckMeetup(due);
+  }, [meetups, userName, now, ongoingCheckMeetup]);
+
+  // Dès qu'une rencontre est clôturée — ou que le délai de vérification est dépassé sans réponse
+  // de l'organisateur — chaque participant (hors organisateur) est invité à laisser son avis.
+  useEffect(() => {
+    if (!userName || ratingMeetup) return;
+    const candidate = meetups.find((m) => {
+      if (m.host === userName) return false;
+      if (!m.participants.includes(userName)) return false;
+      if ((m.ratings || []).some((r) => r.rater === userName)) return false;
+      if (dismissedRatingIds.has(m.id)) return false;
+      return isRatingDue(m, now);
+    });
+    if (candidate) {
+      setRatingMeetup(candidate);
+      setRatingHostStars(0);
+      setRatingSatisfactionStars(0);
+    }
+  }, [meetups, userName, now, ratingMeetup, dismissedRatingIds]);
 
   const applyManualCoords = async (coords) => {
     if (!coords || isNaN(coords.lat) || isNaN(coords.lng)) {
@@ -1335,6 +1416,43 @@ export default function RezoApp() {
     showToast('Rencontre démarrée — chacun peut lancer son trajet.');
   };
 
+  // L'organisateur répond "encore en cours" au check-in de 30 min : on repousse la question
+  // d'un nouveau délai plutôt que de clôturer à sa place.
+  const confirmStillOngoing = async (meetup) => {
+    const updated = meetups.map((m) =>
+      m.id === meetup.id
+        ? { ...m, ongoingDeferredUntil: new Date(Date.now() + MEETUP_CHECKIN_DELAY_MS).toISOString() }
+        : m
+    );
+    await saveMeetups(updated);
+    setOngoingCheckMeetup(null);
+    showToast('On te redemande dans 30 minutes.');
+  };
+
+  // Clôture réelle de la rencontre (confirmée par l'organisateur, ou automatique si le délai de
+  // check-in est dépassé sans réponse) : déclenche l'invitation à noter pour les participants et
+  // rend la rencontre éligible au badge mensuel (voir monthlyCount).
+  const closeMeetupNow = async (meetup) => {
+    const updated = meetups.map((m) =>
+      m.id === meetup.id ? { ...m, closed: true, closedAt: new Date().toISOString() } : m
+    );
+    await saveMeetups(updated);
+    setOngoingCheckMeetup(null);
+    showToast('Rencontre clôturée.');
+  };
+
+  // Ferme la fenêtre d'avis sans noter ("Plus tard") : le bouton "Noter" reste disponible
+  // manuellement, mais la fenêtre automatique ne se réaffichera plus pour cette rencontre.
+  const dismissRatingPrompt = (meetupId) => {
+    setRatingMeetup(null);
+    setDismissedRatingIds((prev) => {
+      const next = new Set(prev);
+      next.add(meetupId);
+      window.storage.set('rezo-rating-dismissed', JSON.stringify([...next]), false).catch(() => {});
+      return next;
+    });
+  };
+
   const ARRIVAL_THRESHOLD_KM = 0.05; // 50 m
 
   // Enregistre l'arrivée d'un participant (pas sa position en continu) et prévient le groupe via le chat.
@@ -1520,7 +1638,7 @@ export default function RezoApp() {
     const meetupAgeMin = m.ageMin || 18;
     const meetupAgeMax = m.ageMax || 99;
     if (meetupAgeMin > ageFilterMax || meetupAgeMax < ageFilterMin) return false;
-    if (!showPast && isPast(m)) return false;
+    if (!showPast && (isPast(m) || m.closed)) return false;
     if (mineOnly && !(userName && (m.host === userName || m.participants.includes(userName)))) return false;
     return true;
   };
@@ -1609,6 +1727,8 @@ export default function RezoApp() {
     // participant peut la démarrer plutôt que d'attendre un hôte qui ne se connectera jamais.
     const canStartAsRezoParticipant =
       !isHost && m.host === REZO_HOST_NAME && isIn && m.participants.length >= m.maxParticipants;
+    // Le bouton "Démarrer" n'apparaît qu'à l'heure prévue, jamais avant (voir hint passif ci-dessous).
+    const hasReachedStart = new Date(m.datetime).getTime() <= now;
     const hostVerified = !!verifiedMap[m.host];
     // Inutile de signaler "déjà rencontré"/"amis en commun" pour une rencontre qu'on a déjà
     // rejointe (forcément vrai puisqu'on y est) — seulement utile pour décider de rejoindre.
@@ -1616,12 +1736,14 @@ export default function RezoApp() {
     const mutualCount = !isHost && !isIn && !alreadyMetHost
       ? m.participants.filter((p) => p !== userName && knownPeople.has(p)).length
       : 0;
-    const past = isPast(m);
+    // Une rencontre clôturée est traitée comme passée partout (badge "Terminée", fin du join,
+    // masquage du badge "En cours"...) même si le délai de grâce de 2h n'est pas encore écoulé.
+    const past = isPast(m) || m.closed;
     const pendingRequests = m.pendingRequests || [];
     const hostStats = hostRatingStats(m.host);
     const satisfactionStats = meetupSatisfactionStats(m);
     const alreadyRated = userName && (m.ratings || []).some((r) => r.rater === userName);
-    const canRate = past && isIn && !isHost && !alreadyRated;
+    const canRate = isIn && !isHost && !alreadyRated && isRatingDue(m, now);
     const activityInfo = activityById(m.activity);
     const ActivityIcon = ACTIVITY_ICONS[m.activity] || Sparkles;
     return (
@@ -1788,10 +1910,17 @@ export default function RezoApp() {
               </button>
             )}
             {(isHost || canStartAsRezoParticipant) && !m.started && !past && (
-              <button className="rate-btn" title="Démarrer la rencontre" onClick={() => startMeetup(m)}>
-                <Radio size={13} />
-                Démarrer
-              </button>
+              hasReachedStart ? (
+                <button className="rate-btn" title="Démarrer la rencontre" onClick={() => startMeetup(m)}>
+                  <Radio size={13} />
+                  Démarrer
+                </button>
+              ) : (
+                <span className="start-hint" title="Le bouton Démarrer apparaît à l'heure prévue">
+                  <Clock size={12} />
+                  Débute à {new Date(m.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )
             )}
             {m.started && (isIn || isHost) && (
               <button
@@ -2313,6 +2442,12 @@ export default function RezoApp() {
         }
         .rate-btn:hover { background: rgba(242,166,90,0.22); }
 
+        .start-hint {
+          display: flex; align-items: center; gap: 5px;
+          color: var(--muted); font-size: 11.5px; font-weight: 600;
+          font-family: 'Inter', sans-serif; padding: 6px 2px;
+        }
+
         .star-display { display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; }
         .star-display-value { font-size: 11px; color: var(--text); font-weight: 600; }
         .star-display-count { font-size: 10.5px; color: var(--muted); }
@@ -2581,6 +2716,12 @@ export default function RezoApp() {
         }
         .modal-submit:disabled { opacity: 1; cursor: not-allowed; box-shadow: none; background: var(--border); color: var(--muted); }
         .modal-submit-danger { background: var(--danger); box-shadow: 0 6px 16px rgba(250,56,62,0.28); }
+        .modal-cancel {
+          width: 100%; padding: 11px; border: 1px solid var(--border); border-radius: 9px;
+          background: transparent; color: var(--text); font-weight: 600; font-size: 13.5px;
+          cursor: pointer; margin-top: 8px; font-family: 'Inter', sans-serif;
+        }
+        .modal-cancel:hover { background: rgba(255,255,255,0.04); }
 
         .chat-modal { display: flex; flex-direction: column; max-height: 78%; padding-bottom: 14px; }
 
@@ -3418,6 +3559,9 @@ export default function RezoApp() {
                 </button>
               ))}
             </div>
+            <button className="modal-cancel" onClick={() => setReportingMeetup(null)}>
+              Annuler
+            </button>
           </div>
         </div>
       )}
@@ -3468,6 +3612,9 @@ export default function RezoApp() {
                 Il/elle apparaîtra en attente de validation par l'organisateur, avec la mention "invité·e par toi".
               </span>
             </div>
+            <button className="modal-cancel" onClick={() => setInvitingMeetup(null)}>
+              Fermer
+            </button>
           </div>
         </div>
       )}
@@ -3477,7 +3624,7 @@ export default function RezoApp() {
           <div className="modal">
             <div className="modal-header">
               <div className="modal-title"><Star size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />Ton avis sur "{ratingMeetup.title}"</div>
-              <button className="modal-close" onClick={() => setRatingMeetup(null)}><X size={18} /></button>
+              <button className="modal-close" onClick={() => dismissRatingPrompt(ratingMeetup.id)}><X size={18} /></button>
             </div>
 
             <div className="field" style={{ alignItems: 'center', textAlign: 'center' }}>
@@ -3496,6 +3643,41 @@ export default function RezoApp() {
               onClick={() => submitRating(ratingMeetup)}
             >
               Envoyer mon avis
+            </button>
+            <button className="modal-cancel" onClick={() => dismissRatingPrompt(ratingMeetup.id)}>
+              Plus tard
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ongoingCheckMeetup && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title">
+                <Radio size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
+                "{ongoingCheckMeetup.title}" est-elle toujours en cours ?
+              </div>
+              <button className="modal-close" onClick={() => setOngoingCheckMeetup(null)}><X size={18} /></button>
+            </div>
+            <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+              Elle a débuté il y a plus de 30 minutes. Dis-nous où ça en est pour prévenir les participants.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="modal-submit"
+                style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)' }}
+                onClick={() => confirmStillOngoing(ongoingCheckMeetup)}
+              >
+                Encore en cours
+              </button>
+              <button className="modal-submit" onClick={() => closeMeetupNow(ongoingCheckMeetup)}>
+                Terminée
+              </button>
+            </div>
+            <button className="modal-cancel" onClick={() => setOngoingCheckMeetup(null)}>
+              Annuler
             </button>
           </div>
         </div>

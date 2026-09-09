@@ -75,8 +75,10 @@ async function main() {
     audience: 'mixte',
     ageMin: 16,
     ageMax: 99,
-    participants: [HOST_NAME],
-    participantGenders: { [HOST_NAME]: 'autre' },
+    // "Équipe REZO" n'est pas un vrai participant : la liste démarre vide (0/N) pour que le
+    // premier vrai utilisateur qui rejoint soit bien affiché comme le premier participant.
+    participants: [],
+    participantGenders: {},
     pendingRequests: [],
     createdAt: new Date().toISOString(),
     coords: null,
