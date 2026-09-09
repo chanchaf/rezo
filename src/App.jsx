@@ -477,6 +477,10 @@ export default function RezoApp() {
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const chatSavingRef = useRef(false);
+  // Nombre de messages lus par rencontre (persisté par appareil) vs. nombre total actuel (rafraîchi
+  // par sondage) : la différence donne le badge de non-lus sur l'icône chat de chaque carte.
+  const [chatReadCounts, setChatReadCounts] = useState({});
+  const [chatTotalCounts, setChatTotalCounts] = useState({});
   const savingRef = useRef(false);
 
   const showToast = (msg) => {
@@ -711,6 +715,55 @@ export default function RezoApp() {
       }
     })();
   }, []);
+
+  // Compteurs de messages lus par rencontre (par appareil) : persistent pour que le badge de
+  // non-lus survive à une fermeture/réouverture de l'app, pas seulement à la session en cours.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get('rezo-chat-read-counts', false);
+        if (res && res.value) setChatReadCounts(JSON.parse(res.value));
+      } catch (err) {
+        // rien de lu pour l'instant, comportement par défaut (tout compte comme non-lu)
+      }
+    })();
+  }, []);
+
+  // Sonde le nombre total de messages de chaque rencontre où l'utilisateur est impliqué (hôte ou
+  // participant), pour calculer le badge de non-lus sans avoir à ouvrir chaque conversation.
+  useEffect(() => {
+    if (!userName) return;
+    const myIds = meetups
+      .filter((m) => m.host === userName || m.participants.includes(userName))
+      .map((m) => m.id);
+    if (!myIds.length) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const results = await Promise.all(
+          myIds.map(async (id) => {
+            try {
+              const res = await window.storage.get(`chat:${id}`, true);
+              const list = res && res.value ? JSON.parse(res.value) : [];
+              return [id, Array.isArray(list) ? list.length : 0];
+            } catch (err) {
+              return [id, 0];
+            }
+          })
+        );
+        if (!cancelled) setChatTotalCounts((prev) => ({ ...prev, ...Object.fromEntries(results) }));
+      } catch (err) {
+        // best effort, un prochain cycle resynchronisera les badges
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userName, meetups.length]);
 
   // 30 min après l'heure prévue, on demande à l'organisateur si sa rencontre est toujours en
   // cours (voir confirmStillOngoing / closeMeetupNow), tant qu'il n'a pas répondu ou que le délai
@@ -1570,18 +1623,37 @@ export default function RezoApp() {
     if (chatMeetup && chatMeetup.id === id) setChatMeetup(null);
   };
 
-  const loadChat = useCallback(async (meetupId, silent) => {
-    if (!silent) setChatLoading(true);
-    try {
-      const res = await window.storage.get(`chat:${meetupId}`, true);
-      const list = res && res.value ? JSON.parse(res.value) : [];
-      setChatMessages(Array.isArray(list) ? list : []);
-    } catch (err) {
-      setChatMessages([]);
-    } finally {
-      if (!silent) setChatLoading(false);
-    }
+  // Marque une rencontre comme lue jusqu'à `count` messages (persisté par appareil) : la
+  // différence avec le total sondé (chatTotalCounts) devient nulle, donc le badge disparaît.
+  const markChatRead = useCallback((meetupId, count) => {
+    setChatReadCounts((prev) => {
+      if (prev[meetupId] === count) return prev;
+      const next = { ...prev, [meetupId]: count };
+      window.storage.set('rezo-chat-read-counts', JSON.stringify(next), false).catch(() => {});
+      return next;
+    });
+    setChatTotalCounts((prev) => (prev[meetupId] === count ? prev : { ...prev, [meetupId]: count }));
   }, []);
+
+  const loadChat = useCallback(
+    async (meetupId, silent) => {
+      if (!silent) setChatLoading(true);
+      try {
+        const res = await window.storage.get(`chat:${meetupId}`, true);
+        const list = res && res.value ? JSON.parse(res.value) : [];
+        const messages = Array.isArray(list) ? list : [];
+        setChatMessages(messages);
+        // Le chat est ouvert (loadChat n'est appelé que dans ce cas) : tout ce qui est chargé est
+        // immédiatement considéré comme lu, y compris pendant le sondage toutes les 3,5s.
+        markChatRead(meetupId, messages.length);
+      } catch (err) {
+        setChatMessages([]);
+      } finally {
+        if (!silent) setChatLoading(false);
+      }
+    },
+    [markChatRead]
+  );
 
   const openChat = (meetup) => {
     setChatMeetup(meetup);
@@ -1610,6 +1682,7 @@ export default function RezoApp() {
         const result = await window.storage.set(`chat:${chatMeetup.id}`, JSON.stringify(updated), true);
         if (!result) throw new Error('save failed');
         setChatMessages(updated);
+        markChatRead(chatMeetup.id, updated.length);
         setChatInput('');
       } catch (err) {
         showToast("Message non envoyé, réessaie.");
@@ -1781,6 +1854,7 @@ export default function RezoApp() {
     const satisfactionStats = meetupSatisfactionStats(m);
     const alreadyRated = userName && (m.ratings || []).some((r) => r.rater === userName);
     const canRate = isIn && !isHost && !alreadyRated && isRatingDue(m, now);
+    const unreadChatCount = Math.max(0, (chatTotalCounts[m.id] || 0) - (chatReadCounts[m.id] || 0));
     const activityInfo = activityById(m.activity);
     const ActivityIcon = ACTIVITY_ICONS[m.activity] || Sparkles;
     return (
@@ -1933,6 +2007,9 @@ export default function RezoApp() {
               onClick={() => openChat(m)}
             >
               <MessageCircle size={14} />
+              {unreadChatCount > 0 && (
+                <span className="chat-unread-badge">{unreadChatCount > 9 ? '9+' : unreadChatCount}</span>
+              )}
             </button>
             {(isIn || isHost) && (
               <button
@@ -2474,11 +2551,18 @@ export default function RezoApp() {
 
         .footer-actions { display: flex; align-items: center; gap: 6px; }
         .chat-icon-btn {
+          position: relative;
           background: var(--ink); border: 1px solid var(--border); color: var(--muted);
           border-radius: 8px; padding: 6px 8px; cursor: pointer; display: flex; align-items: center;
         }
         .chat-icon-btn:hover:not(:disabled) { border-color: var(--live); color: var(--live); }
         .chat-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .chat-unread-badge {
+          position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px;
+          padding: 0 4px; border-radius: 999px; background: var(--danger); color: #fff;
+          font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+          box-shadow: 0 0 0 2px var(--card);
+        }
         .arrivals-count {
           margin-left: 4px; background: rgba(127,207,158,0.2); color: #7FCF9E;
           font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 5px;
