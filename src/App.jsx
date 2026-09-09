@@ -1625,6 +1625,13 @@ export default function RezoApp() {
   // "vraiment vide" (aucune rencontre ne correspond, période) d'un flux juste "vide ici"
   // (des rencontres existent mais ailleurs) — pour ne jamais montrer un mur sans solution.
   const matchesCore = (m) => {
+    if (mineOnly) {
+      // "Mes sorties" est un pur historique des rencontres terminées (voir cycle de vie
+      // démarrer/clôturer) où l'utilisateur était impliqué — organisateur ou participant, sans
+      // distinction — et rien d'autre : ni les filtres de recherche, ni "Voir les passées" (qui
+      // ne s'applique qu'au flux "Découvrir") ne s'y mêlent.
+      return !!(userName && m.closed && (m.host === userName || m.participants.includes(userName)));
+    }
     const isHostOfM = userName && m.host === userName;
     if ((m.reports || []).length >= REPORT_THRESHOLD && !isHostOfM) return false;
     const matchesActivity = selectedActivity === 'all' ? true : m.activity === selectedActivity;
@@ -1639,7 +1646,6 @@ export default function RezoApp() {
     const meetupAgeMax = m.ageMax || 99;
     if (meetupAgeMin > ageFilterMax || meetupAgeMax < ageFilterMin) return false;
     if (!showPast && (isPast(m) || m.closed)) return false;
-    if (mineOnly && !(userName && (m.host === userName || m.participants.includes(userName)))) return false;
     return true;
   };
 
@@ -1663,7 +1669,8 @@ export default function RezoApp() {
   };
 
   const coreFiltered = withDistance.filter(matchesCore);
-  const filtered = coreFiltered.filter(matchesLocation);
+  // "Mes sorties" ignore aussi la recherche de zone : c'est un historique, pas une recherche.
+  const filtered = mineOnly ? coreFiltered : coreFiltered.filter(matchesLocation);
 
   const locationFilterActive = !!zoneQuery.trim() || (!!userCoords && radiusKm < 30);
   // "Ville fantôme" : rien ici, mais des rencontres existent ailleurs -> ne jamais montrer un
@@ -3008,6 +3015,15 @@ export default function RezoApp() {
               </div>
             ))}
           </div>
+        ) : mineOnly && filtered.length === 0 ? (
+          <div className="rezo-empty">
+            <Bookmark size={38} color="var(--border-strong)" style={{ marginBottom: 10 }} />
+            <div className="rezo-empty-title">Aucune rencontre terminée pour l'instant</div>
+            <div>
+              Tes rencontres passées (organisées ou rejointes) apparaîtront ici une fois clôturées —
+              pratique pour retrouver leur chat ou laisser un avis.
+            </div>
+          </div>
         ) : grouped.length === 0 && nearbyFallback.length === 0 ? (
           <div className="rezo-empty">
             <Compass size={38} color="var(--border-strong)" style={{ marginBottom: 10 }} />
@@ -3084,8 +3100,10 @@ export default function RezoApp() {
             <div className="sheet-section">
               <div className="switch-row">
                 <div>
-                  <div className="switch-title">Mes rencontres</div>
-                  <div className="switch-subtitle">N'afficher que celles que j'organise ou rejoins</div>
+                  <div className="switch-title">Mes sorties</div>
+                  <div className="switch-subtitle">
+                    Historique de mes rencontres terminées (organisées ou rejointes)
+                  </div>
                 </div>
                 <button
                   className={`switch ${mineOnly ? 'on' : ''}`}
@@ -3096,20 +3114,22 @@ export default function RezoApp() {
                   <span className="switch-knob"></span>
                 </button>
               </div>
-              <div className="switch-row">
-                <div>
-                  <div className="switch-title">Voir les passées</div>
-                  <div className="switch-subtitle">Inclure les rencontres déjà terminées</div>
+              {!mineOnly && (
+                <div className="switch-row">
+                  <div>
+                    <div className="switch-title">Voir les passées</div>
+                    <div className="switch-subtitle">Inclure les rencontres déjà terminées</div>
+                  </div>
+                  <button
+                    className={`switch ${showPast ? 'on' : ''}`}
+                    role="switch"
+                    aria-checked={showPast}
+                    onClick={() => setShowPast((v) => !v)}
+                  >
+                    <span className="switch-knob"></span>
+                  </button>
                 </div>
-                <button
-                  className={`switch ${showPast ? 'on' : ''}`}
-                  role="switch"
-                  aria-checked={showPast}
-                  onClick={() => setShowPast((v) => !v)}
-                >
-                  <span className="switch-knob"></span>
-                </button>
-              </div>
+              )}
             </div>
 
             <div className="sheet-section">
