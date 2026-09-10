@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscribeFromPush, notifyByName } from './lib/push.js';
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
+import { LANGUAGES, translate, detectBrowserLanguage, dirForLanguage } from './lib/i18n.js';
 
 // Large éventail d'activités pour toucher un public international aux intérêts variés
 // (inspiré des catégories des grandes apps de meetup) tout en restant scannable dans une seule
@@ -244,13 +245,9 @@ function isRatingDue(m, now) {
 // à attendre d'un hôte qui n'existe pas) et démarrage ouvert à tout participant une fois complètes.
 const REZO_HOST_NAME = 'Équipe REZO';
 
-const REPORT_REASONS = [
-  'Spam ou publicité',
-  'Contenu inapproprié',
-  'Rencontre suspecte / arnaque',
-  'Faux profil ou usurpation',
-  'Autre',
-];
+// Traduit via t(`report.${id}`) — voir i18n.js. `id` est ce qui est stocké dans m.reports[].reason
+// (jamais réaffiché ailleurs dans l'UI), pas le libellé, pour rester indépendant de la langue.
+const REPORT_REASONS = ['spam', 'inappropriate', 'scam', 'fakeProfile', 'other'];
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -301,15 +298,32 @@ async function saveAccounts(accounts) {
   await window.storage.set(ACCOUNTS_KEY, JSON.stringify(accounts), true);
 }
 
-function formatWhen(iso) {
+// Découpe un texte traduit contenant des jetons {clé} pour y injecter des éléments React (liens
+// cliquables notamment) plutôt qu'un simple remplacement de texte — voir translate() dans i18n.js
+// pour l'interpolation texte-à-texte classique, utilisée partout ailleurs.
+function interpolateNodes(template, replacements) {
+  return template.split(/(\{\w+\})/g).map((part, i) => {
+    const match = part.match(/^\{(\w+)\}$/);
+    if (match && replacements[match[1]] !== undefined) {
+      return <React.Fragment key={i}>{replacements[match[1]]}</React.Fragment>;
+    }
+    return part;
+  });
+}
+
+const WHEN_LOCALES = { fr: 'fr-FR', en: 'en-GB', ar: 'ar-MA' };
+const TODAY_LABEL = { fr: "Aujourd'hui", en: 'Today', ar: 'اليوم' };
+
+function formatWhen(iso, lang = 'fr') {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   const today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
+  const locale = WHEN_LOCALES[lang] || WHEN_LOCALES.fr;
   const opts = { hour: '2-digit', minute: '2-digit' };
-  if (sameDay) return `Aujourd'hui · ${d.toLocaleTimeString('fr-FR', opts)}`;
-  return `${d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })} · ${d.toLocaleTimeString('fr-FR', opts)}`;
+  if (sameDay) return `${TODAY_LABEL[lang] || TODAY_LABEL.fr} · ${d.toLocaleTimeString(locale, opts)}`;
+  return `${d.toLocaleDateString(locale, { day: '2-digit', month: 'short' })} · ${d.toLocaleTimeString(locale, opts)}`;
 }
 
 // Distance réelle entre deux coordonnées GPS (formule de haversine), en km
@@ -343,12 +357,12 @@ function formatDistance(km) {
 }
 
 // Libellé lisible pour la tranche d'âge ciblée par une rencontre.
-function formatAgeRange(min, max) {
+function formatAgeRange(min, max, t) {
   const lo = min || 18;
   const hi = max || 99;
-  if (lo <= 18 && hi >= 99) return 'Tous âges';
-  if (hi >= 99) return `${lo} ans et +`;
-  return `${lo}-${hi} ans`;
+  if (lo <= 18 && hi >= 99) return t('card.allAges');
+  if (hi >= 99) return t('card.ageAndUp', { age: lo });
+  return t('card.ageRange', { min: lo, max: hi });
 }
 
 // Construit un lien Google Maps pour une rencontre : coordonnées GPS si disponibles,
@@ -434,6 +448,33 @@ function fileToCoverDataUrl(file) {
 
 // Logos officiels (multicolore Google, bleu Facebook) pour les boutons "Continuer avec…" de
 // l'écran d'authentification — aucune icône de marque n'existe dans lucide-react.
+// Sélecteur de langue discret (drapeau + code, ex: 🇫🇷 FR) réutilisé avant l'écran d'authentification
+// et dans Paramètres → Langue (voir README "Langue et RTL").
+function LanguageMenu({ language, onChange, open, onToggle, align = 'left' }) {
+  const current = LANGUAGES.find((l) => l.code === language) || LANGUAGES[0];
+  return (
+    <div className="lang-menu-wrap">
+      <button type="button" className="lang-menu-btn" onClick={onToggle}>
+        {current.flag} {current.code.toUpperCase()}
+      </button>
+      {open && (
+        <div className={`lang-menu-dropdown ${align === 'right' ? 'align-right' : ''}`}>
+          {LANGUAGES.map((l) => (
+            <button
+              key={l.code}
+              type="button"
+              className={`lang-menu-item ${l.code === language ? 'active' : ''}`}
+              onClick={() => onChange(l.code)}
+            >
+              {l.flag} {l.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -500,7 +541,7 @@ function StarDisplay({ value, count, size = 12 }) {
 function FieldLabel({ icon: Icon, children }) {
   return (
     <label>
-      {Icon && <Icon size={12} style={{ verticalAlign: '-2px', marginRight: 5, opacity: 0.75 }} />}
+      {Icon && <Icon size={12} style={{ verticalAlign: '-2px', marginInlineEnd: 5, opacity: 0.75 }} />}
       {children}
     </label>
   );
@@ -552,6 +593,10 @@ export default function RezoApp() {
   const [userBio, setUserBio] = useState('');
   const [showProfilePage, setShowProfilePage] = useState(false);
   const [showSettingsSheet, setShowSettingsSheet] = useState(false);
+  // Langue d'interface : par appareil tant qu'aucun compte n'est connecté, puis synchronisée dans
+  // le compte (voir setLanguage) — jamais bloquant, repli FR géré par translate() si une clé manque.
+  const [language, setLanguageState] = useState('fr');
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [userGender, setUserGender] = useState(null);
   const [userPreferences, setUserPreferences] = useState([]);
   const [userAvatar, setUserAvatar] = useState(null);
@@ -650,6 +695,32 @@ export default function RezoApp() {
     setTimeout(() => setToast(null), 2600);
   };
 
+  const t = useCallback((key, vars) => translate(language, key, vars), [language]);
+  const dir = dirForLanguage(language);
+  // Les id/couleurs des catégories (ACTIVITIES) restent la clé de données stable ; seul le libellé
+  // affiché est traduit — jamais utiliser aLabel()/gLabel()/audLabel() comme valeur stockée.
+  const aLabel = useCallback((id) => t(`activity.${id}`), [t]);
+  const gLabel = useCallback((id) => t(`gender.${id}`), [t]);
+  const audLabel = useCallback((id) => t(`audience.${id}`), [t]);
+
+  // Change la langue d'interface : par appareil immédiatement, et synchronisée dans le compte dès
+  // qu'un utilisateur est connecté (voir Objectif de la demande : "sauvegardé dans le profil...
+  // synchronisé sur tous ses appareils"). N'affecte jamais le contenu créé par les utilisateurs.
+  const setLanguage = async (code) => {
+    setLanguageState(code);
+    setLangMenuOpen(false);
+    try {
+      await window.storage.set('rezo-language', code, false);
+      if (userEmail) {
+        const accounts = await loadAccounts();
+        accounts[userEmail] = { ...(accounts[userEmail] || {}), language: code };
+        await saveAccounts(accounts);
+      }
+    } catch (err) {
+      // best effort
+    }
+  };
+
   // Écran de démarrage animé, affiché à chaque lancement de l'app avant de révéler le contenu.
   useEffect(() => {
     const hideTimer = setTimeout(() => setSplashHiding(true), 1500);
@@ -682,7 +753,7 @@ export default function RezoApp() {
       setMeetups(updated);
       setLastSync(new Date());
     } catch (err) {
-      showToast("Erreur d'enregistrement, réessaie.");
+      showToast(t('toast.saveError'));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -763,7 +834,7 @@ export default function RezoApp() {
         if (seen.has(name)) return;
         seen.add(name);
         if (!isFirstPass && concernsMe && name !== userName) {
-          showToast(`📍 ${name} est arrivé·e à "${m.title}"`);
+          showToast(t('toast.arrivalNotify', { name, title: m.title }));
         }
       });
     });
@@ -868,6 +939,16 @@ export default function RezoApp() {
       } catch (err) {
         // désactivé par défaut
       }
+      try {
+        const res = await window.storage.get('rezo-language', false);
+        if (res && res.value && LANGUAGES.some((l) => l.code === res.value)) {
+          setLanguageState(res.value);
+        } else {
+          setLanguageState(detectBrowserLanguage());
+        }
+      } catch (err) {
+        setLanguageState(detectBrowserLanguage());
+      }
     })();
   }, []);
 
@@ -884,17 +965,17 @@ export default function RezoApp() {
       unsubscribeFromPush(userEmail)
         .then(() => {
           setPushEnabled(false);
-          showToast('Notifications désactivées.');
+          showToast(t('toast.pushDisabled'));
         })
-        .catch(() => showToast('Impossible de désactiver les notifications.'))
+        .catch(() => showToast(t('toast.pushDisableFailed')))
         .finally(() => setPushBusy(false));
     } else {
       subscribeToPush(userEmail)
         .then(() => {
           setPushEnabled(true);
-          showToast('Notifications activées !');
+          showToast(t('toast.pushEnabled'));
         })
-        .catch((err) => showToast(err.message || 'Impossible d’activer les notifications.'))
+        .catch((err) => showToast(err.message || t('toast.pushEnableFailed')))
         .finally(() => setPushBusy(false));
     }
   };
@@ -920,7 +1001,7 @@ export default function RezoApp() {
       await window.storage.set('public-lastnames', JSON.stringify(nextMap), true);
       setPublicLastNames(nextMap);
     } catch (err) {
-      showToast('Impossible de mettre à jour, réessaie.');
+      showToast(t('toast.unreadUpdateFailed'));
     }
   };
 
@@ -942,7 +1023,7 @@ export default function RezoApp() {
       await window.storage.set('public-cities', JSON.stringify(nextMap), true);
       setPublicCities(nextMap);
     } catch (err) {
-      showToast('Impossible de mettre à jour, réessaie.');
+      showToast(t('toast.unreadUpdateFailed'));
     }
   };
 
@@ -971,7 +1052,7 @@ export default function RezoApp() {
         const res = await window.storage.get(monthKey, false).catch(() => null);
         if (res && res.value) return;
         await window.storage.set(monthKey, 'true', false);
-        showToast(`🏅 Badge débloqué : ${BADGE_THRESHOLD} rencontres ce mois-ci !`);
+        showToast(t('toast.badgeUnlocked', { threshold: BADGE_THRESHOLD }));
       } catch (err) {
         // best effort
       }
@@ -1084,7 +1165,7 @@ export default function RezoApp() {
 
   const applyManualCoords = async (coords) => {
     if (!coords || isNaN(coords.lat) || isNaN(coords.lng)) {
-      showToast('Coordonnées invalides.');
+      showToast(t('toast.invalidCoords'));
       return;
     }
     setUserCoords(coords);
@@ -1094,7 +1175,7 @@ export default function RezoApp() {
     } catch (err) {
       // best effort
     }
-    showToast('Position définie manuellement.');
+    showToast(t('toast.positionSetManually'));
   };
 
   // Le GPS seul n'est pas fiable (permission refusée, contexte restreint...) : la source principale
@@ -1103,7 +1184,7 @@ export default function RezoApp() {
   // l'intérieur du groupe "même ville" quand il est accordé.
   const activateNearMe = () => {
     if (!userCity) {
-      showToast('Ajoute ta ville dans ton profil pour activer ce tri.');
+      showToast(t('toast.addCityFirst'));
       openProfile();
       return;
     }
@@ -1118,7 +1199,7 @@ export default function RezoApp() {
       } catch (err) {
         // best effort
       }
-      showToast(`📍 Tri activé : rencontres à ${userCity} en premier.`);
+      showToast(t('toast.nearMeActivated', { city: userCity }));
     }, 300);
 
     // Bonus GPS best effort, en arrière-plan : n'empêche jamais le tri par ville de fonctionner
@@ -1157,7 +1238,7 @@ export default function RezoApp() {
     } catch (err) {
       // best effort
     }
-    showToast('Tri par proximité désactivé.');
+    showToast(t('toast.positionDisabled'));
   };
 
   const resetPhoneVerifyUi = () => {
@@ -1268,7 +1349,7 @@ export default function RezoApp() {
         return;
       }
       const passwordHash = await hashPassword(authPassword);
-      accounts[email] = { passwordHash, createdAt: new Date().toISOString() };
+      accounts[email] = { passwordHash, createdAt: new Date().toISOString(), language };
       await saveAccounts(accounts);
       await window.storage.set('rezo-email', email, false);
       setUserEmail(email);
@@ -1346,6 +1427,15 @@ export default function RezoApp() {
       if (avatar) await window.storage.set('rezo-avatar', avatar, false);
       if (phone) await window.storage.set('rezo-phone', phone, false);
       await window.storage.set('rezo-phone-verified', phoneVerified ? 'true' : 'false', false);
+      // Langue : priorité à celle déjà enregistrée sur le compte (synchronisation multi-appareils) ;
+      // sinon on adopte celle de cet appareil et on l'enregistre sur le compte pour la prochaine fois.
+      if (account.language && LANGUAGES.some((l) => l.code === account.language)) {
+        setLanguageState(account.language);
+        await window.storage.set('rezo-language', account.language, false);
+      } else {
+        accounts[email] = { ...accounts[email], language };
+        await saveAccounts(accounts);
+      }
       setUserEmail(email);
       setUserName(name || null);
       setUserLastName(lastName || null);
@@ -1449,6 +1539,13 @@ export default function RezoApp() {
       if (gender) await window.storage.set('rezo-gender', gender, false);
       if (preferences.length) await window.storage.set('rezo-preferences', JSON.stringify(preferences), false);
       if (avatar) await window.storage.set('rezo-avatar', avatar, false);
+      if (account.language && LANGUAGES.some((l) => l.code === account.language)) {
+        setLanguageState(account.language);
+        await window.storage.set('rezo-language', account.language, false);
+      } else {
+        accounts[fullPhone] = { ...accounts[fullPhone], language };
+        await saveAccounts(accounts);
+      }
 
       setUserEmail(fullPhone);
       setUserPhone(fullPhone);
@@ -1490,11 +1587,11 @@ export default function RezoApp() {
   // Google/Facebook nécessitent de vraies applications OAuth (client ID, App ID Facebook) qu'on ne
   // peut pas improviser ici : plutôt que de simuler une fausse connexion, on l'annonce clairement.
   const handleOAuthStub = (provider) => {
-    showToast(`Connexion avec ${provider} pas encore disponible dans ce prototype — utilise le téléphone ou l'e-mail.`);
+    showToast(t('toast.oauthUnavailable', { provider }));
   };
 
   const showLegalPlaceholder = (label) => {
-    showToast(`${label} : à rédiger avant une mise en production réelle.`);
+    showToast(t('toast.legalPlaceholder', { label }));
   };
 
   const logout = async () => {
@@ -1521,7 +1618,7 @@ export default function RezoApp() {
     setShowProfilePage(false);
     setShowSettingsSheet(false);
     setPendingAction(null);
-    showToast('Déconnecté·e.');
+    showToast(t('toast.loggedOut'));
   };
 
   const togglePreference = (id) => {
@@ -1535,7 +1632,7 @@ export default function RezoApp() {
       const dataUrl = await fileToAvatarDataUrl(file);
       setAvatarDraft(dataUrl);
     } catch (err) {
-      showToast("Impossible d'utiliser cette image.");
+      showToast(t('toast.imageError'));
     } finally {
       setAvatarProcessing(false);
     }
@@ -1548,7 +1645,7 @@ export default function RezoApp() {
       const dataUrl = await fileToCoverDataUrl(file);
       setCoverDraft(dataUrl);
     } catch (err) {
-      showToast("Impossible d'utiliser cette image.");
+      showToast(t('toast.imageError'));
     } finally {
       setCoverProcessing(false);
     }
@@ -1667,7 +1764,7 @@ export default function RezoApp() {
   const requestPhoneVerification = async () => {
     const phone = phoneDraft.trim();
     if (!phone) {
-      showToast('Renseigne un numéro de téléphone.');
+      showToast(t('toast.enterPhoneNumber'));
       return;
     }
     setVerifyBusy(true);
@@ -1677,7 +1774,7 @@ export default function RezoApp() {
       setVerifyDevCode(devCode);
       setVerifyCodeInput('');
     } catch (err) {
-      showToast(err.message || 'Impossible d’envoyer le code.');
+      showToast(err.message || t('toast.codeSendFailed'));
     } finally {
       setVerifyBusy(false);
     }
@@ -1692,9 +1789,9 @@ export default function RezoApp() {
       await confirmPhoneCode(userEmail, phone, code);
       setPhoneVerifiedDraft(true);
       resetPhoneVerifyUi();
-      showToast('Numéro vérifié !');
+      showToast(t('toast.phoneVerifiedToast'));
     } catch (err) {
-      showToast(err.message || 'Code incorrect.');
+      showToast(err.message || t('toast.wrongCode'));
     } finally {
       setVerifyBusy(false);
     }
@@ -1730,7 +1827,7 @@ export default function RezoApp() {
         await saveMeetups(updated);
         setShowCreate(false);
         setEditingMeetup(null);
-        showToast('Rencontre mise à jour !');
+        showToast(t('toast.meetupUpdated'));
         return;
       }
 
@@ -1758,7 +1855,7 @@ export default function RezoApp() {
       await saveMeetups(updated);
       setShowCreate(false);
       setTemplateDraft(null);
-      showToast('Rencontre créée !');
+      showToast(t('toast.meetupCreated'));
     });
   };
 
@@ -1778,7 +1875,7 @@ export default function RezoApp() {
           return { ...m, participants: m.participants.filter((p) => p !== name), participantGenders };
         });
         await saveMeetups(updated);
-        showToast('Tu as quitté la rencontre.');
+        showToast(t('toast.leftMeetup'));
         return;
       }
 
@@ -1790,21 +1887,21 @@ export default function RezoApp() {
             : m
         );
         await saveMeetups(updated);
-        showToast('Demande annulée.');
+        showToast(t('toast.requestCanceled'));
         return;
       }
 
       if (meetup.participants.length >= meetup.maxParticipants) {
-        showToast('Cette rencontre est complète.');
+        showToast(t('toast.meetupFull'));
         return;
       }
       const audience = meetup.audience || 'mixte';
       if (audience === 'femmes' && gender !== 'femme') {
-        showToast('Cette rencontre est réservée aux femmes.');
+        showToast(t('toast.womenOnly'));
         return;
       }
       if (audience === 'hommes' && gender !== 'homme') {
-        showToast('Cette rencontre est réservée aux hommes.');
+        showToast(t('toast.menOnly'));
         return;
       }
 
@@ -1821,7 +1918,7 @@ export default function RezoApp() {
             : m
         );
         await saveMeetups(updated);
-        showToast('Tu as rejoint la rencontre !');
+        showToast(t('toast.joined'));
         return;
       }
 
@@ -1834,7 +1931,7 @@ export default function RezoApp() {
           : m
       );
       await saveMeetups(updated);
-      showToast("Demande envoyée à l'organisateur.");
+      showToast(t('toast.requestSent'));
       notifyByName(
         meetup.host,
         'Nouvelle demande',
@@ -1846,7 +1943,7 @@ export default function RezoApp() {
 
   const respondToRequest = async (meetup, requesterName, accept) => {
     if (accept && meetup.participants.length >= meetup.maxParticipants) {
-      showToast('Rencontre complète, impossible d’accepter.');
+      showToast(t('toast.cantAcceptFull'));
       return;
     }
     const updated = meetups.map((m) => {
@@ -1858,7 +1955,11 @@ export default function RezoApp() {
       return { ...m, pendingRequests, participants: [...m.participants, requesterName], participantGenders };
     });
     await saveMeetups(updated);
-    showToast(accept ? `${requesterName} a été accepté·e.` : `Demande de ${requesterName} refusée.`);
+    showToast(
+      accept
+        ? t('toast.requestAccepted', { name: requesterName })
+        : t('toast.requestRejected', { name: requesterName })
+    );
     if (accept) {
       notifyByName(
         requesterName,
@@ -1875,7 +1976,7 @@ export default function RezoApp() {
     requireName(async (name) => {
       const already = (meetup.reports || []).some((r) => r.reporter === name);
       if (already) {
-        showToast('Tu as déjà signalé cette rencontre.');
+        showToast(t('toast.alreadyReported'));
         setReportingMeetup(null);
         return;
       }
@@ -1886,7 +1987,7 @@ export default function RezoApp() {
       );
       await saveMeetups(updated);
       setReportingMeetup(null);
-      showToast('Signalement envoyé, merci.');
+      showToast(t('toast.reportSent'));
     });
   };
 
@@ -1898,9 +1999,9 @@ export default function RezoApp() {
   const copyInviteText = async (meetup) => {
     try {
       await navigator.clipboard.writeText(inviteShareText(meetup));
-      showToast('Message copié.');
+      showToast(t('toast.messageCopied'));
     } catch (err) {
-      showToast('Impossible de copier automatiquement.');
+      showToast(t('toast.copyFailed'));
     }
   };
 
@@ -1924,11 +2025,11 @@ export default function RezoApp() {
       const alreadyIn = meetup.participants.includes(trimmed);
       const alreadyPending = (meetup.pendingRequests || []).some((r) => r.name === trimmed);
       if (alreadyIn || alreadyPending) {
-        showToast('Cette personne est déjà inscrite ou en attente.');
+        showToast(t('toast.alreadyRegisteredOrPending'));
         return;
       }
       if (meetup.participants.length >= meetup.maxParticipants) {
-        showToast('Rencontre complète, impossible d’inviter pour le moment.');
+        showToast(t('toast.cantInviteFull'));
         return;
       }
       const updated = meetups.map((m) =>
@@ -1944,7 +2045,7 @@ export default function RezoApp() {
       );
       await saveMeetups(updated);
       setInviteNameDraft('');
-      showToast(`${trimmed} a été invité·e — en attente de validation par l'organisateur.`);
+      showToast(t('toast.friendInvited', { name: trimmed }));
     });
   };
 
@@ -1996,33 +2097,33 @@ export default function RezoApp() {
   // Badges "façon succès" : chaque palier est un badge distinct, débloqué indépendamment une fois
   // le seuil atteint — collection visuelle plutôt qu'un simple compteur (voir Objectif de la demande).
   const PROFILE_BADGES = [
-    { id: 'org-1', icon: Sparkles, label: 'Premier pas', hint: '1 rencontre organisée', threshold: 1, counter: organizedCount },
-    { id: 'org-5', icon: Award, label: 'Organisateur·rice confirmé·e', hint: '5 rencontres organisées', threshold: 5, counter: organizedCount },
-    { id: 'org-10', icon: Trophy, label: 'Pilier de la communauté', hint: '10 rencontres organisées', threshold: 10, counter: organizedCount },
-    { id: 'part-3', icon: Flame, label: 'Habitué·e', hint: '3 rencontres rejointes', threshold: 3, counter: participatedCount },
-    { id: 'part-10', icon: Medal, label: 'Grand·e explorateur·rice', hint: '10 rencontres rejointes', threshold: 10, counter: participatedCount },
-    { id: 'arrival-3', icon: Zap, label: 'Toujours à l’heure', hint: 'Premier·ère arrivé·e 3 fois', threshold: 3, counter: firstArrivalCount },
+    { id: 'org-1', icon: Sparkles, label: t('badge.orgFirst.label'), hint: t('badge.orgFirst.hint'), threshold: 1, counter: organizedCount },
+    { id: 'org-5', icon: Award, label: t('badge.orgConfirmed.label'), hint: t('badge.orgConfirmed.hint'), threshold: 5, counter: organizedCount },
+    { id: 'org-10', icon: Trophy, label: t('badge.orgPillar.label'), hint: t('badge.orgPillar.hint'), threshold: 10, counter: organizedCount },
+    { id: 'part-3', icon: Flame, label: t('badge.habitue.label'), hint: t('badge.habitue.hint'), threshold: 3, counter: participatedCount },
+    { id: 'part-10', icon: Medal, label: t('badge.explorer.label'), hint: t('badge.explorer.hint'), threshold: 10, counter: participatedCount },
+    { id: 'arrival-3', icon: Zap, label: t('badge.onTime.label'), hint: t('badge.onTime.hint'), threshold: 3, counter: firstArrivalCount },
   ].map((b) => ({ ...b, unlocked: b.counter >= b.threshold }));
 
   const submitRating = (meetup) => {
     if (!ratingHostStars || !ratingSatisfactionStars) {
-      showToast('Choisis une note pour les deux critères.');
+      showToast(t('toast.pickBothRatings'));
       return;
     }
     requireName(async (name) => {
       if (name === meetup.host) {
-        showToast("Tu ne peux pas te noter toi-même.");
+        showToast(t('toast.cantRateSelf'));
         setRatingMeetup(null);
         return;
       }
       if (!meetup.participants.includes(name)) {
-        showToast('Seuls les participants peuvent noter cette rencontre.');
+        showToast(t('toast.onlyParticipantsCanRate'));
         setRatingMeetup(null);
         return;
       }
       const already = (meetup.ratings || []).some((r) => r.rater === name);
       if (already) {
-        showToast('Tu as déjà noté cette rencontre.');
+        showToast(t('toast.alreadyRated'));
         setRatingMeetup(null);
         return;
       }
@@ -2046,7 +2147,7 @@ export default function RezoApp() {
       setRatingMeetup(null);
       setRatingHostStars(0);
       setRatingSatisfactionStars(0);
-      showToast('Merci pour ton avis !');
+      showToast(t('toast.thanksForRating'));
     });
   };
 
@@ -2055,7 +2156,7 @@ export default function RezoApp() {
       m.id === meetup.id ? { ...m, started: true, startedAt: new Date().toISOString() } : m
     );
     await saveMeetups(updated);
-    showToast('Rencontre démarrée — chacun peut lancer son trajet.');
+    showToast(t('toast.meetupStarted'));
   };
 
   // L'organisateur répond "encore en cours" au check-in de 30 min : on repousse la question
@@ -2068,7 +2169,7 @@ export default function RezoApp() {
     );
     await saveMeetups(updated);
     setOngoingCheckMeetup(null);
-    showToast('On te redemande dans 30 minutes.');
+    showToast(t('toast.askAgainLater'));
   };
 
   // Clôture réelle de la rencontre (confirmée par l'organisateur, ou automatique si le délai de
@@ -2080,7 +2181,7 @@ export default function RezoApp() {
     );
     await saveMeetups(updated);
     setOngoingCheckMeetup(null);
-    showToast('Rencontre clôturée.');
+    showToast(t('toast.meetupClosed'));
   };
 
   // Ferme la fenêtre d'avis sans noter ("Plus tard") : le bouton "Noter" reste disponible
@@ -2119,7 +2220,7 @@ export default function RezoApp() {
       const others = new Set([meetup.host, ...meetup.participants].filter((p) => p !== name));
       others.forEach((p) => notifyByName(p, 'Quelqu’un est arrivé', `📍 ${name} est arrivé·e à "${meetup.title}"`, '/'));
     } catch (err) {
-      showToast("Impossible d'enregistrer ton arrivée, réessaie.");
+      showToast(t('toast.arrivalSaveFailed'));
     }
   };
 
@@ -2147,9 +2248,9 @@ export default function RezoApp() {
       } catch (err) {
         // message de chat non retiré, l'annulation de l'arrivée reste effective
       }
-      showToast('Arrivée annulée.');
+      showToast(t('toast.arrivalCanceled'));
     } catch (err) {
-      showToast("Impossible d'annuler ton arrivée, réessaie.");
+      showToast(t('toast.arrivalCancelFailed'));
     }
   };
 
@@ -2178,7 +2279,7 @@ export default function RezoApp() {
           if (d < ARRIVAL_THRESHOLD_KM) {
             stopJourney();
             markArrival(meetup, name);
-            showToast('Tu es arrivé·e !');
+            showToast(t('toast.youArrived'));
           }
         },
         (err) => {
@@ -2198,7 +2299,7 @@ export default function RezoApp() {
     requireName((name) => {
       stopJourney();
       markArrival(meetup, name);
-      showToast('Arrivée confirmée !');
+      showToast(t('toast.arrivalConfirmed'));
     });
   };
 
@@ -2208,7 +2309,7 @@ export default function RezoApp() {
     const updated = meetups.filter((m) => m.id !== id);
     await saveMeetups(updated);
     setConfirmDeleteId(null);
-    showToast('Rencontre supprimée.');
+    showToast(t('toast.meetupDeleted'));
     if (chatMeetup && chatMeetup.id === id) setChatMeetup(null);
   };
 
@@ -2274,7 +2375,7 @@ export default function RezoApp() {
         markChatRead(chatMeetup.id, updated.length);
         setChatInput('');
       } catch (err) {
-        showToast("Message non envoyé, réessaie.");
+        showToast(t('toast.chatSendFailed'));
       } finally {
         chatSavingRef.current = false;
         setChatSending(false);
@@ -2399,7 +2500,7 @@ export default function RezoApp() {
   // Suggestions d'autocomplétion de la barre "Rechercher une activité" — sur le nom des
   // catégories, remplace la rangée d'icônes retirée de cet écran.
   const activitySuggestions = activityQuery.trim()
-    ? ACTIVITIES.filter((a) => a.label.toLowerCase().includes(activityQuery.trim().toLowerCase())).slice(0, 6)
+    ? ACTIVITIES.filter((a) => aLabel(a.id).toLowerCase().includes(activityQuery.trim().toLowerCase())).slice(0, 6)
     : [];
 
   // Toutes les personnes croisées par l'utilisateur (co-participants ou organisateurs de
@@ -2473,7 +2574,7 @@ export default function RezoApp() {
           style={{ background: `linear-gradient(135deg, ${activityInfo.color}, ${shadeColor(activityInfo.color, -30)})` }}
         >
           <ActivityIcon size={44} className="card-banner-icon" />
-          <span className="card-banner-label">{activityInfo.label}</span>
+          <span className="card-banner-label">{aLabel(m.activity)}</span>
         </div>
         <div className="card-body">
         <div className="card-top">
@@ -2490,7 +2591,7 @@ export default function RezoApp() {
             <div className="card-actions">
               <button
                 className="delete-btn"
-                title="Modifier"
+                title={t('card.edit')}
                 onClick={() => {
                   setEditingMeetup(m);
                   setShowCreate(true);
@@ -2498,7 +2599,7 @@ export default function RezoApp() {
               >
                 <Pencil size={13} />
               </button>
-              <button className="delete-btn" title="Supprimer" onClick={() => setConfirmDeleteId(m.id)}>
+              <button className="delete-btn" title={t('modal.delete.confirm')} onClick={() => setConfirmDeleteId(m.id)}>
                 <X size={13} />
               </button>
             </div>
@@ -2506,17 +2607,17 @@ export default function RezoApp() {
         </div>
         {audience !== 'mixte' && (
           <span className={`audience-badge audience-${audience}`}>
-            {audience === 'femmes' ? '100% Femmes' : '100% Hommes'}
+            {audience === 'femmes' ? t('audience.femmes') : t('audience.hommes')}
           </span>
         )}
         {m.started && !past && (
           <span className="live-badge">
-            <span className="pulse"></span> En cours
+            <span className="pulse"></span> {t('card.live')}
           </span>
         )}
         <div className="card-meta">
           <div className="card-meta-row">
-            <MapPin size={12} /> {m.location ? `${m.location} · ${m.zone || ''}` : m.zone || 'Zone non précisée'}
+            <MapPin size={12} /> {m.location ? `${m.location} · ${m.zone || ''}` : m.zone || t('card.zoneUnspecified')}
             {m._distance !== null && <span style={{ color: 'var(--live)' }}> · {formatDistance(m._distance)}</span>}
           </div>
           {mapsLinkFor(m) && (
@@ -2527,24 +2628,24 @@ export default function RezoApp() {
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
             >
-              <ExternalLink size={11} /> Voir sur la carte
+              <ExternalLink size={11} /> {t('card.viewOnMap')}
             </a>
           )}
-          <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime)}{past && ' · Terminée'}</div>
-          <div className="card-meta-row"><Cake size={12} /> {formatAgeRange(m.ageMin, m.ageMax)}</div>
+          <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime, language)}{past && ` · ${t('card.ended')}`}</div>
+          <div className="card-meta-row"><Cake size={12} /> {formatAgeRange(m.ageMin, m.ageMax, t)}</div>
           <div className="card-meta-row">
-            Organisé par {m.host}{publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}
-            {publicCities[m.host] ? ` · ${publicCities[m.host]}` : ''}{isHost ? ' (toi)' : ''}
+            {t('card.organizedBy', { host: m.host })}{publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}
+            {publicCities[m.host] ? ` · ${publicCities[m.host]}` : ''}{isHost ? t('card.you') : ''}
             {hostVerified && (
-              <span className="card-verified-badge" title="Numéro de téléphone vérifié">
-                <ShieldCheck size={12} /> Vérifié
+              <span className="card-verified-badge" title={t('card.verified')}>
+                <ShieldCheck size={12} /> {t('card.verified')}
               </span>
             )}
             {hostStats && <StarDisplay value={hostStats.avg} count={hostStats.count} size={11} />}
           </div>
           {satisfactionStats && (
             <div className="card-meta-row">
-              Satisfaction <StarDisplay value={satisfactionStats.avg} count={satisfactionStats.count} size={11} />
+              {t('card.satisfaction')} <StarDisplay value={satisfactionStats.avg} count={satisfactionStats.count} size={11} />
             </div>
           )}
         </div>
@@ -2552,8 +2653,8 @@ export default function RezoApp() {
           <div className="trust-row">
             <Users size={12} />
             {alreadyMetHost
-              ? `Organisé par quelqu'un que tu as déjà rencontré`
-              : `${mutualCount} ami${mutualCount > 1 ? 's' : ''} en commun parmi les participants`}
+              ? t('card.alreadyMet')
+              : t(mutualCount > 1 ? 'card.mutualFriendsPlural' : 'card.mutualFriends', { count: mutualCount })}
           </div>
         )}
         {m.note && <div className="card-note">{m.note}</div>}
@@ -2567,25 +2668,25 @@ export default function RezoApp() {
         {isHost && pendingRequests.length > 0 && (
           <div className="pending-box">
             <div className="pending-title">
-              {pendingRequests.length} demande{pendingRequests.length > 1 ? 's' : ''} en attente
+              {t(pendingRequests.length > 1 ? 'card.pendingRequestsPlural' : 'card.pendingRequests', { count: pendingRequests.length })}
             </div>
             {pendingRequests.map((r) => (
               <div className="pending-row" key={r.name}>
                 <span>
                   {r.name}
-                  {r.invitedBy && <span className="pending-invited-by"> · invité·e par {r.invitedBy}</span>}
+                  {r.invitedBy && <span className="pending-invited-by">{t('card.invitedBy', { name: r.invitedBy })}</span>}
                 </span>
                 <div className="pending-actions">
                   <button
                     className="pending-accept"
-                    title="Accepter"
+                    title={t('card.accept')}
                     onClick={() => respondToRequest(m, r.name, true)}
                   >
                     <Check size={13} />
                   </button>
                   <button
                     className="pending-reject"
-                    title="Refuser"
+                    title={t('card.reject')}
                     onClick={() => respondToRequest(m, r.name, false)}
                   >
                     <X size={13} />
@@ -2604,7 +2705,7 @@ export default function RezoApp() {
             {!isHost && (
               <button
                 className="chat-icon-btn"
-                title="Signaler cette rencontre"
+                title={t('card.reportMeetup')}
                 onClick={() => setReportingMeetup(m)}
               >
                 <Flag size={13} />
@@ -2613,7 +2714,7 @@ export default function RezoApp() {
             <button
               className="chat-icon-btn"
               disabled={!isIn && !isHost}
-              title={isIn || isHost ? 'Discussion du groupe' : 'Réservé aux membres acceptés'}
+              title={isIn || isHost ? t('card.groupChat') : t('card.membersOnly')}
               onClick={() => openChat(m)}
             >
               <MessageCircle size={14} />
@@ -2624,7 +2725,7 @@ export default function RezoApp() {
             {(isIn || isHost) && (
               <button
                 className="chat-icon-btn"
-                title="Inviter des amis"
+                title={t('card.inviteFriends')}
                 onClick={() => {
                   setInvitingMeetup(m);
                   setInviteNameDraft('');
@@ -2635,21 +2736,21 @@ export default function RezoApp() {
             )}
             {(isHost || canStartAsRezoParticipant) && !m.started && !past && (
               hasReachedStart ? (
-                <button className="rate-btn" title="Démarrer la rencontre" onClick={() => startMeetup(m)}>
+                <button className="rate-btn" title={t('card.start')} onClick={() => startMeetup(m)}>
                   <Radio size={13} />
-                  Démarrer
+                  {t('card.start')}
                 </button>
               ) : (
-                <span className="start-hint" title="Le bouton Démarrer apparaît à l'heure prévue">
+                <span className="start-hint" title={t('card.startHint')}>
                   <Clock size={12} />
-                  Débute à {new Date(m.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                  {t('card.startsAt', { time: new Date(m.datetime).toLocaleTimeString(WHEN_LOCALES[language] || 'fr-FR', { hour: '2-digit', minute: '2-digit' }) })}
                 </span>
               )
             )}
             {m.started && (isIn || isHost) && (
               <button
                 className="chat-icon-btn live-btn"
-                title="Mon trajet vers la rencontre"
+                title={t('card.journeyTitle')}
                 onClick={() => {
                   setJourneyMeetupId(m.id);
                   setJourneyError(null);
@@ -2671,7 +2772,7 @@ export default function RezoApp() {
                 }}
               >
                 <Star size={13} />
-                Noter
+                {t('card.rate')}
               </button>
             )}
             {/* L'organisateur ne "quitte" pas sa propre rencontre : modifier/supprimer suffisent
@@ -2679,10 +2780,10 @@ export default function RezoApp() {
             {isHost && m.started && !m.closed && !past && (
               <button
                 className="join-btn leave"
-                title="Clôturer la rencontre pour tout le monde"
+                title={t('card.endMeetupHint')}
                 onClick={() => setOngoingCheckMeetup(m)}
               >
-                Terminer la rencontre
+                {t('card.endMeetup')}
               </button>
             )}
             {!isHost && (
@@ -2691,18 +2792,18 @@ export default function RezoApp() {
                   isFull || genderBlocked ? 'full' : isIn ? 'leave' : isPending ? 'pending' : 'join'
                 }`}
                 disabled={isFull || genderBlocked}
-                title={genderBlocked ? `Réservé ${audience === 'femmes' ? 'aux femmes' : 'aux hommes'}` : undefined}
+                title={genderBlocked ? (audience === 'femmes' ? t('card.reservedWomen') : t('card.reservedMen')) : undefined}
                 onClick={() => requestOrLeave(m)}
               >
                 {isIn
-                  ? 'Quitter'
+                  ? t('card.leave')
                   : isPending
-                  ? 'Annuler la demande'
+                  ? t('card.cancelRequest')
                   : isFull
-                  ? 'Complet'
+                  ? t('card.full')
                   : genderBlocked
-                  ? 'Non éligible'
-                  : 'Demander à rejoindre'}
+                  ? t('card.notEligible')
+                  : t('card.join')}
               </button>
             )}
           </div>
@@ -2713,7 +2814,7 @@ export default function RezoApp() {
   };
 
   return (
-    <div className="rezo-app">
+    <div className="rezo-app" dir={dir}>
       <style>{`
         .rezo-app {
           --ink: #F0F2F5;
@@ -3449,6 +3550,10 @@ export default function RezoApp() {
         }
         .settings-row:hover { border-color: var(--border-strong); }
         .settings-row-chevron { margin-left: auto; color: var(--muted); }
+        .settings-row-lang { cursor: default; }
+        .settings-row-lang .lang-menu-wrap { margin-left: auto; }
+        [dir="rtl"] .settings-row-chevron { margin-left: 0; margin-right: auto; }
+        [dir="rtl"] .settings-row-lang .lang-menu-wrap { margin-left: 0; margin-right: auto; }
         .settings-section-label {
           font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
           color: var(--muted); margin: 18px 0 8px;
@@ -3632,6 +3737,28 @@ export default function RezoApp() {
         }
         .auth-oauth-btn:hover { border-color: var(--border-strong); background: var(--card-hover); }
 
+        .lang-menu-wrap { position: relative; display: inline-block; }
+        .lang-menu-btn {
+          background: var(--ink); border: 1px solid var(--border); border-radius: 999px;
+          padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text);
+          cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .lang-menu-btn:hover { border-color: var(--border-strong); }
+        .lang-menu-dropdown {
+          position: absolute; top: calc(100% + 6px); left: 0; z-index: 10;
+          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          box-shadow: 0 8px 20px rgba(0,0,0,0.12); padding: 4px; min-width: 140px;
+          display: flex; flex-direction: column; gap: 2px;
+        }
+        .lang-menu-dropdown.align-right { left: auto; right: 0; }
+        .lang-menu-item {
+          background: none; border: none; text-align: left; padding: 8px 10px; border-radius: 7px;
+          font-size: 12.5px; color: var(--text); cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .lang-menu-item:hover { background: var(--card-hover); }
+        .lang-menu-item.active { background: rgba(var(--live-rgb),0.12); color: var(--live); font-weight: 600; }
+        .auth-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+
         .invite-preview {
           background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
           padding: 10px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.4;
@@ -3787,6 +3914,26 @@ export default function RezoApp() {
 
         .rezo-scroll::-webkit-scrollbar { width: 6px; }
         .rezo-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+        /* --- Support RTL (arabe) --------------------------------------------------------------
+           L'attribut dir=rtl sur .rezo-app inverse déjà nativement le texte, la ponctuation et
+           l'ordre des listes ; les flex row suivent aussi l'axe d'écriture (donc gap/icônes
+           s'inversent tout seuls). Ce qui NE s'inverse PAS tout seul : les positions absolues
+           câblées en left/right, les bordures d'accent directionnelles, et les icônes de
+           navigation (retour) dont le sens doit être inversé plutôt que simplement repositionné. */
+        [dir="rtl"] .modal-close,
+        [dir="rtl"] .profile-modal-close { right: auto; left: 10px; }
+        [dir="rtl"] .cover-edit-btn { right: auto; left: 10px; }
+        [dir="rtl"] .cover-remove-btn { right: auto; left: 10px; }
+        [dir="rtl"] .profile-avatar-edit-btn { right: auto; left: 2px; }
+        [dir="rtl"] .profile-page-back { left: auto; right: 14px; }
+        [dir="rtl"] .profile-page-settings { right: auto; left: 14px; }
+        [dir="rtl"] .chips-label { margin-right: 0; margin-left: 2px; }
+        [dir="rtl"] .arrivals-count { margin-left: 0; margin-right: 4px; }
+        [dir="rtl"] .star-display { margin-left: 0; margin-right: 4px; }
+        [dir="rtl"] .live-list-row { border-left: none; border-right: 3px solid var(--live); }
+        [dir="rtl"] .live-list-row.arrived { border-left-color: transparent; border-right-color: #7FCF9E; }
+        [dir="rtl"] .lang-menu-dropdown.align-right { right: auto; left: 0; }
       `}</style>
 
       {showSplash && (
@@ -3807,11 +3954,11 @@ export default function RezoApp() {
       <div className="rezo-header">
         <div>
           <div className="rezo-brand">REZO<span className="dot">·</span></div>
-          <div className="rezo-tagline">Rencontres par activité, près de toi, à l'instant</div>
+          <div className="rezo-tagline">{t('app.tagline')}</div>
         </div>
         <div className="rezo-live">
           <span className="pulse"></span>
-          En direct{lastSync ? ` · sync ${lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : ''}
+          {t('app.liveSync')}{lastSync ? ` · ${t('app.liveSyncAt', { time: lastSync.toLocaleTimeString(WHEN_LOCALES[language] || 'fr-FR', { hour: '2-digit', minute: '2-digit' }) })}` : ''}
         </div>
       </div>
 
@@ -3821,7 +3968,7 @@ export default function RezoApp() {
           <div className="rezo-zone-input activity-search">
             <Search size={14} color="var(--muted)" />
             <input
-              placeholder="Rechercher une activité…"
+              placeholder={t('search.activityPlaceholder')}
               value={activityQuery}
               onChange={(e) => {
                 setActivityQuery(e.target.value);
@@ -3843,14 +3990,14 @@ export default function RezoApp() {
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
                         setSelectedActivity(a.id);
-                        setActivityQuery(a.label);
+                        setActivityQuery(aLabel(a.id));
                         setActivitySuggestOpen(false);
                       }}
                     >
                       <span className="activity-suggest-icon" style={{ background: a.color }}>
                         <Icon size={13} color="#1C1E21" />
                       </span>
-                      {a.label}
+                      {aLabel(a.id)}
                     </button>
                   );
                 })}
@@ -3861,7 +4008,7 @@ export default function RezoApp() {
           <div className="rezo-zone-input">
             <MapPin size={14} color="var(--muted)" />
             <input
-              placeholder="Filtrer par zone…"
+              placeholder={t('search.zonePlaceholder')}
               value={zoneQuery}
               onChange={(e) => setZoneQuery(e.target.value)}
             />
@@ -3874,7 +4021,7 @@ export default function RezoApp() {
           disabled={locating}
         >
           {locating ? <Loader2 size={13} className="spin" /> : <Navigation size={13} />}
-          {nearMeActive ? '📍 Tri par proximité activé' : locating ? 'Recherche…' : '📍 Activités proches de moi'}
+          {nearMeActive ? t('position.active') : locating ? t('position.locating') : t('position.cta')}
         </button>
       </div>
         {locationError && (
@@ -3910,8 +4057,8 @@ export default function RezoApp() {
       {nearMeActive && userCity && (
         <div className="recommended-wrap near-city-wrap">
           <div className="recommended-title">
-            <MapPin size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} color="var(--live)" />
-            Près de {userCity}
+            <MapPin size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 5 }} color="var(--live)" />
+            {t('position.nearCity', { city: userCity })}
           </div>
           {nearCityMeetups.length > 0 ? (
             <div className="rezo-grid near-city-grid">
@@ -3919,7 +4066,7 @@ export default function RezoApp() {
             </div>
           ) : (
             <div className="near-city-empty">
-              Rien à {userCity} pour l'instant, voici les autres rencontres ci-dessous.
+              {t('position.emptyCity', { city: userCity })}
             </div>
           )}
         </div>
@@ -3928,7 +4075,7 @@ export default function RezoApp() {
       {recommended.length > 0 && (
         <div className="recommended-wrap">
           <div className="recommended-title">
-            <Heart size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} fill="var(--amber)" color="var(--amber)" />
+            <Heart size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 5 }} fill="var(--amber)" color="var(--amber)" />
             Recommandé pour toi
           </div>
           <div className="recommended-scroll">
@@ -3967,26 +4114,23 @@ export default function RezoApp() {
         ) : mineOnly && filtered.length === 0 ? (
           <div className="rezo-empty">
             <Bookmark size={38} color="var(--border-strong)" style={{ marginBottom: 10 }} />
-            <div className="rezo-empty-title">Aucune rencontre terminée pour l'instant</div>
-            <div>
-              Tes rencontres passées (organisées ou rejointes) apparaîtront ici une fois clôturées —
-              pratique pour retrouver leur chat ou laisser un avis.
-            </div>
+            <div className="rezo-empty-title">{t('empty.noHistoryTitle')}</div>
+            <div>{t('empty.noHistoryBody')}</div>
           </div>
         ) : grouped.length === 0 && nearbyFallback.length === 0 ? (
           <div className="rezo-empty">
             <Compass size={38} color="var(--border-strong)" style={{ marginBottom: 10 }} />
-            <div className="rezo-empty-title">Aucune rencontre ici pour l'instant</div>
-            <div>Sois le premier à lancer une activité — choisis une idée pour démarrer en un tap :</div>
+            <div className="rezo-empty-title">{t('empty.noMeetupsTitle')}</div>
+            <div>{t('empty.noMeetupsBody')}</div>
             <div className="quick-templates">
-              {QUICK_TEMPLATES.map((t) => (
+              {QUICK_TEMPLATES.map((qt) => (
                 <button
-                  key={t.id}
+                  key={qt.id}
                   className="quick-template-card"
-                  onClick={() => requireName(() => { setTemplateDraft(t); setShowCreate(true); })}
+                  onClick={() => requireName(() => { setTemplateDraft(qt); setShowCreate(true); })}
                 >
-                  <span className="quick-template-emoji">{t.emoji}</span>
-                  <span className="quick-template-label">{t.label}</span>
+                  <span className="quick-template-emoji">{qt.emoji}</span>
+                  <span className="quick-template-label">{qt.label}</span>
                 </button>
               ))}
             </div>
@@ -3995,8 +4139,9 @@ export default function RezoApp() {
           <div className="rezo-fallback">
             <div className="rezo-fallback-banner">
               <Compass size={15} />
-              {zoneQuery.trim() ? `Rien à "${zoneQuery.trim()}" pour l'instant` : 'Rien dans ce rayon pour l’instant'} — voici{' '}
-              {nearbyFallback.length === 1 ? 'la rencontre la plus proche' : `les ${nearbyFallback.length} rencontres les plus proches`} :
+              {zoneQuery.trim() ? t('empty.nothingAtZone', { zone: zoneQuery.trim() }) : t('empty.nothingInRadius')}
+              {t('empty.hereIs')}{' '}
+              {nearbyFallback.length === 1 ? t('empty.closestOne') : t('empty.closestMany', { count: nearbyFallback.length })} :
             </div>
             <div className="rezo-grid">{nearbyFallback.map((m) => renderMeetupCard(m))}</div>
           </div>
@@ -4005,7 +4150,7 @@ export default function RezoApp() {
             <div className="rezo-section" key={g.id}>
               <div className="rezo-section-title">
                 <span className="swatch" style={{ background: g.color }}></span>
-                {g.label} · {g.items.length}
+                {aLabel(g.id)} · {g.items.length}
               </div>
               <div className="rezo-grid">
                 {g.items.map((m) => renderMeetupCard(m))}
@@ -4021,18 +4166,18 @@ export default function RezoApp() {
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-handle"></div>
             <div className="sheet-header">
-              <div className="modal-title"><SlidersHorizontal size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />Filtres</div>
+              <div className="modal-title"><SlidersHorizontal size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />{t('filters.title')}</div>
               <button className="modal-close" onClick={() => setFiltersOpen(false)}><X size={18} /></button>
             </div>
 
             <div className="sheet-section">
-              <div className="filters-row-label">Type de rencontre</div>
+              <div className="filters-row-label">{t('filters.meetingType')}</div>
               <div className="segmented">
                 <button
                   className={`segmented-item ${selectedAudience === 'all' ? 'active' : ''}`}
                   onClick={() => setSelectedAudience('all')}
                 >
-                  Tous
+                  {t('audience.all')}
                 </button>
                 {AUDIENCE_OPTIONS.map((a) => (
                   <button
@@ -4040,7 +4185,7 @@ export default function RezoApp() {
                     className={`segmented-item ${selectedAudience === a.id ? 'active' : ''}`}
                     onClick={() => setSelectedAudience(a.id)}
                   >
-                    {a.short}
+                    {audLabel(a.id)}
                   </button>
                 ))}
               </div>
@@ -4049,9 +4194,9 @@ export default function RezoApp() {
             <div className="sheet-section">
               <div className="switch-row">
                 <div>
-                  <div className="switch-title">Mes sorties</div>
+                  <div className="switch-title">{t('filters.mySorties')}</div>
                   <div className="switch-subtitle">
-                    Historique de mes rencontres terminées (organisées ou rejointes)
+                    {t('filters.mySortiesSub')}
                   </div>
                 </div>
                 <button
@@ -4066,8 +4211,8 @@ export default function RezoApp() {
               {!mineOnly && (
                 <div className="switch-row">
                   <div>
-                    <div className="switch-title">Voir les passées</div>
-                    <div className="switch-subtitle">Inclure les rencontres déjà terminées</div>
+                    <div className="switch-title">{t('filters.showPast')}</div>
+                    <div className="switch-subtitle">{t('filters.showPastSub')}</div>
                   </div>
                   <button
                     className={`switch ${showPast ? 'on' : ''}`}
@@ -4082,7 +4227,7 @@ export default function RezoApp() {
             </div>
 
             <div className="sheet-section">
-              <FieldLabel icon={Cake}>Tranche d'âge</FieldLabel>
+              <FieldLabel icon={Cake}>{t('filters.ageRange')}</FieldLabel>
               <div className="age-range-row">
                 <input
                   type="number"
@@ -4091,7 +4236,7 @@ export default function RezoApp() {
                   value={ageFilterMin}
                   onChange={(e) => setAgeFilterMin(Math.min(Number(e.target.value) || 16, ageFilterMax))}
                 />
-                <span className="age-range-sep">à</span>
+                <span className="age-range-sep">{t('filters.ageSep')}</span>
                 <input
                   type="number"
                   min={16}
@@ -4099,13 +4244,13 @@ export default function RezoApp() {
                   value={ageFilterMax}
                   onChange={(e) => setAgeFilterMax(Math.max(Number(e.target.value) || 99, ageFilterMin))}
                 />
-                <span className="age-range-sep">ans</span>
+                <span className="age-range-sep">{t('filters.ageUnit')}</span>
               </div>
             </div>
 
             {userCoords && (
               <div className="sheet-section">
-                <FieldLabel icon={Navigation}>Rayon de recherche</FieldLabel>
+                <FieldLabel icon={Navigation}>{t('filters.searchRadius')}</FieldLabel>
                 <div className="radius-control">
                   <input
                     type="range"
@@ -4121,10 +4266,10 @@ export default function RezoApp() {
 
             <div className="sheet-footer">
               <button className="filters-reset" onClick={resetFilters}>
-                Réinitialiser
+                {t('filters.reset')}
               </button>
               <button className="modal-submit sheet-apply" onClick={() => setFiltersOpen(false)}>
-                Voir les résultats
+                {t('filters.seeResults')}
               </button>
             </div>
           </div>
@@ -4137,19 +4282,19 @@ export default function RezoApp() {
           onClick={() => setMineOnly(false)}
         >
           <Home size={20} />
-          <span>Découvrir</span>
+          <span>{t('nav.discover')}</span>
         </button>
         <button
           className={`bottom-nav-item ${mineOnly ? 'active' : ''}`}
           onClick={() => setMineOnly(true)}
         >
           <Bookmark size={20} />
-          <span>Mes sorties</span>
+          <span>{t('nav.mySorties')}</span>
         </button>
         <button
           className="bottom-nav-center"
           onClick={() => requireName(() => setShowCreate(true))}
-          aria-label="Créer une rencontre"
+          aria-label={t('nav.create')}
         >
           <Plus size={24} />
         </button>
@@ -4158,7 +4303,7 @@ export default function RezoApp() {
           onClick={() => setFiltersOpen(true)}
         >
           <SlidersHorizontal size={20} />
-          <span>Filtres</span>
+          <span>{t('nav.filters')}</span>
           {activeFilterCount > 0 && <span className="bottom-nav-badge">{activeFilterCount}</span>}
         </button>
         <button
@@ -4166,7 +4311,7 @@ export default function RezoApp() {
           onClick={openProfilePage}
         >
           {userName ? <Avatar name={userName} avatarUrl={userAvatar} size={22} /> : <User size={20} />}
-          <span>Profil</span>
+          <span>{t('nav.profile')}</span>
           {badgeUnlocked && <span className="bottom-nav-badge">{monthlyCount}</span>}
         </button>
       </nav>
@@ -4185,6 +4330,9 @@ export default function RezoApp() {
           initial={editingMeetup}
           template={templateDraft}
           defaultZone={zoneQuery}
+          t={t}
+          aLabel={aLabel}
+          audLabel={audLabel}
         />
       )}
 
@@ -4193,22 +4341,31 @@ export default function RezoApp() {
           <div className="modal">
             {authScreen === 'choose' && (
               <>
+                <div className="auth-header-row">
+                  <LanguageMenu
+                    language={language}
+                    onChange={setLanguage}
+                    open={langMenuOpen}
+                    onToggle={() => setLangMenuOpen((v) => !v)}
+                  />
+                </div>
+
                 <div className="modal-header">
                   <div className="modal-title">
-                    <Lock size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
-                    Connexion
+                    <Lock size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />
+                    {t('auth.title')}
                   </div>
                   <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
                 </div>
 
                 <div className="auth-intro">
-                  Connecte-toi pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.
+                  {t('auth.intro')}
                 </div>
 
                 {authError && <div className="auth-error" role="alert">{authError}</div>}
 
                 <div className="field">
-                  <label>Numéro de téléphone</label>
+                  <label>{t('auth.phoneLabel')}</label>
                   <div className="phone-dial-row">
                     <select
                       className="dial-code-select"
@@ -4234,15 +4391,18 @@ export default function RezoApp() {
                 </div>
 
                 <div className="auth-legal-text">
-                  Le site est protégé par reCAPTCHA et la{' '}
-                  <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder('Politique de confidentialité')}>
-                    politique de confidentialité
-                  </button>{' '}
-                  et les{' '}
-                  <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder("Conditions d'utilisation")}>
-                    conditions d'utilisation
-                  </button>{' '}
-                  s'appliquent.
+                  {interpolateNodes(t('auth.legalText'), {
+                    privacy: (
+                      <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyPolicy'))}>
+                        {t('auth.privacyPolicy')}
+                      </button>
+                    ),
+                    terms: (
+                      <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.termsOfUse'))}>
+                        {t('auth.termsOfUse')}
+                      </button>
+                    ),
+                  })}
                 </div>
 
                 <button
@@ -4252,7 +4412,7 @@ export default function RezoApp() {
                   onClick={() => requestPhoneAuthCode('whatsapp')}
                 >
                   {authPhoneBusy && authPhoneChannel === 'whatsapp' ? <Loader2 size={15} className="spin" /> : <MessageCircle size={15} />}
-                  Recevoir le code par WhatsApp
+                  {t('auth.whatsapp')}
                 </button>
                 <button
                   type="button"
@@ -4261,23 +4421,23 @@ export default function RezoApp() {
                   onClick={() => requestPhoneAuthCode('sms')}
                 >
                   {authPhoneBusy && authPhoneChannel === 'sms' ? <Loader2 size={15} className="spin" /> : <Phone size={15} />}
-                  Recevoir le code par SMS
+                  {t('auth.sms')}
                 </button>
 
-                <div className="auth-separator"><span>ou avec</span></div>
+                <div className="auth-separator"><span>{t('auth.orWith')}</span></div>
 
                 <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
-                  <GoogleIcon /> Continuer avec Google
+                  <GoogleIcon /> {t('auth.continueGoogle')}
                 </button>
                 <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Facebook')}>
-                  <FacebookIcon /> Continuer avec Facebook
+                  <FacebookIcon /> {t('auth.continueFacebook')}
                 </button>
                 <button
                   type="button"
                   className="auth-oauth-btn"
                   onClick={() => { setAuthScreen('email'); setAuthMode('login'); setAuthError(null); }}
                 >
-                  <Mail size={18} color="var(--muted)" /> Continuer avec e-mail
+                  <Mail size={18} color="var(--muted)" /> {t('auth.continueEmail')}
                 </button>
               </>
             )}
@@ -4286,42 +4446,45 @@ export default function RezoApp() {
               <>
                 <div className="modal-header">
                   <div className="modal-title">
-                    <Phone size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
-                    Vérifie ton numéro
+                    <Phone size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />
+                    {t('auth.verifyPhone')}
                   </div>
                   <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
                 </div>
 
                 <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('choose'); setAuthError(null); }}>
-                  <ChevronRight size={13} style={{ transform: 'rotate(180deg)', verticalAlign: '-2px' }} /> Retour
+                  <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)', verticalAlign: '-2px' }} /> {t('auth.back')}
                 </button>
 
                 <div className="auth-intro">
-                  Code envoyé par {authPhoneChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} au {authDialCode} {authPhoneNumber}.
+                  {t('auth.codeSentVia', {
+                    channel: authPhoneChannel === 'whatsapp' ? 'WhatsApp' : 'SMS',
+                    phone: `${authDialCode} ${authPhoneNumber}`,
+                  })}
                 </div>
 
                 {authPhoneDevCode && (
                   <div className="verify-code-hint">
-                    Code de démonstration (aucun fournisseur SMS/WhatsApp réel branché) : <strong>{authPhoneDevCode}</strong>
+                    {interpolateNodes(t('auth.devCodeHint'), { code: <strong>{authPhoneDevCode}</strong> })}
                   </div>
                 )}
 
                 {authError && <div className="auth-error" role="alert">{authError}</div>}
 
                 <div className="field">
-                  <label>Code reçu</label>
+                  <label>{t('auth.codeLabel')}</label>
                   <input
                     autoFocus
                     value={authPhoneCode}
                     onChange={(e) => setAuthPhoneCode(e.target.value)}
-                    placeholder="Code à 6 chiffres"
+                    placeholder={t('field.sixDigitCode')}
                     maxLength={6}
                     onKeyDown={(e) => e.key === 'Enter' && confirmPhoneAuthCode()}
                   />
                 </div>
 
                 <button className="modal-submit" disabled={authPhoneBusy || !authPhoneCode.trim()} onClick={confirmPhoneAuthCode}>
-                  {authPhoneBusy ? 'Vérification…' : 'Vérifier'}
+                  {authPhoneBusy ? `${t('auth.verify')}…` : t('auth.verify')}
                 </button>
 
                 <button
@@ -4330,7 +4493,7 @@ export default function RezoApp() {
                   disabled={authPhoneBusy}
                   onClick={() => requestPhoneAuthCode(authPhoneChannel)}
                 >
-                  Renvoyer le code
+                  {t('auth.resendCode')}
                 </button>
               </>
             )}
@@ -4339,24 +4502,24 @@ export default function RezoApp() {
               <>
                 <div className="modal-header">
                   <div className="modal-title">
-                    <Mail size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
-                    {authMode === 'signup' ? 'Créer un compte' : 'Connectez-vous avec votre adresse e-mail'}
+                    <Mail size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />
+                    {authMode === 'signup' ? t('auth.createAccount') : t('auth.emailLoginTitle')}
                   </div>
                   <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
                 </div>
 
                 <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('choose'); setAuthError(null); }}>
-                  <ChevronRight size={13} style={{ transform: 'rotate(180deg)', verticalAlign: '-2px' }} /> Retour
+                  <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)', verticalAlign: '-2px' }} /> {t('auth.back')}
                 </button>
 
                 {authMode === 'signup' && (
                   <div className="auth-intro">
-                    Crée ton compte REZO pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.
+                    {t('auth.intro')}
                   </div>
                 )}
 
                 <div className="field">
-                  <label>Adresse e-mail</label>
+                  <label>{t('auth.emailLabel')}</label>
                   <div className="input-with-icon">
                     <Mail size={14} color="var(--muted)" />
                     <input
@@ -4372,7 +4535,7 @@ export default function RezoApp() {
                 </div>
 
                 <div className="field">
-                  <label>Mot de passe</label>
+                  <label>{t('auth.passwordLabel')}</label>
                   <div className="input-with-icon">
                     <Lock size={14} color="var(--muted)" />
                     <input
@@ -4396,7 +4559,7 @@ export default function RezoApp() {
 
                 {authMode === 'signup' && (
                   <div className="field">
-                    <label>Confirmer le mot de passe</label>
+                    <label>{t('auth.confirmPasswordLabel')}</label>
                     <div className={`input-with-icon ${authConfirm && authConfirm !== authPassword ? 'mismatch' : ''}`}>
                       <Lock size={14} color="var(--muted)" />
                       <input
@@ -4418,9 +4581,9 @@ export default function RezoApp() {
                   <button
                     type="button"
                     className="auth-forgot-link"
-                    onClick={() => showLegalPlaceholder('Réinitialisation du mot de passe')}
+                    onClick={() => showLegalPlaceholder(t('auth.forgotPassword'))}
                   >
-                    Mot de passe oublié ?
+                    {t('auth.forgotPassword')}
                   </button>
                 )}
 
@@ -4440,18 +4603,21 @@ export default function RezoApp() {
                   }
                   onClick={authMode === 'signup' ? submitSignup : submitLogin}
                 >
-                  {authSubmitting ? 'Patiente…' : authMode === 'signup' ? 'Créer mon compte' : 'Connexion'}
+                  {authSubmitting ? '…' : authMode === 'signup' ? t('auth.createAccount') : t('auth.login')}
                 </button>
 
                 <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
-                  <GoogleIcon /> Se connecter avec Google
+                  <GoogleIcon /> {t('auth.googleLogin')}
                 </button>
 
                 <div className="auth-legal-text">
-                  En continuant, tu acceptes le traitement de tes données personnelles — voir notre{' '}
-                  <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder('Déclaration de confidentialité')}>
-                    déclaration de confidentialité
-                  </button>.
+                  {interpolateNodes(t('auth.dataMention'), {
+                    link: (
+                      <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyStatement'))}>
+                        {t('auth.privacyStatement')}
+                      </button>
+                    ),
+                  })}
                 </div>
 
                 <button
@@ -4462,7 +4628,7 @@ export default function RezoApp() {
                     setAuthError(null);
                   }}
                 >
-                  {authMode === 'signup' ? 'Déjà un compte ? Se connecter' : "Vous n'avez pas de compte ? Créez-en un"}
+                  {authMode === 'signup' ? t('auth.hasAccount') : t('auth.noAccount')}
                 </button>
               </>
             )}
@@ -4481,7 +4647,7 @@ export default function RezoApp() {
               className="profile-cover profile-cover-editable"
               style={coverDraft || userCover ? { backgroundImage: `url(${coverDraft !== null ? coverDraft : userCover})` } : undefined}
             >
-              <label className="cover-edit-btn" title="Changer la photo de couverture">
+              <label className="cover-edit-btn" title={t('field.changeCover')}>
                 {coverProcessing ? <Loader2 size={13} className="spin" /> : <ImageIcon size={13} />}
                 <input
                   type="file"
@@ -4491,7 +4657,7 @@ export default function RezoApp() {
                 />
               </label>
               {(coverDraft || userCover) && (
-                <button type="button" className="cover-remove-btn" title="Retirer la couverture" onClick={() => setCoverDraft('')}>
+                <button type="button" className="cover-remove-btn" title={t('field.removeCover')} onClick={() => setCoverDraft('')}>
                   <X size={12} />
                 </button>
               )}
@@ -4502,7 +4668,7 @@ export default function RezoApp() {
                 avatarUrl={avatarDraft !== null ? avatarDraft : userAvatar}
                 size={84}
               />
-              <label className="profile-avatar-edit-btn" title="Changer la photo">
+              <label className="profile-avatar-edit-btn" title={t('field.changePhoto')}>
                 {avatarProcessing ? <Loader2 size={13} className="spin" /> : <Camera size={13} />}
                 <input
                   type="file"
@@ -4514,16 +4680,16 @@ export default function RezoApp() {
             </div>
             {(avatarDraft || userAvatar) && (
               <button type="button" className="avatar-remove-btn profile-avatar-remove" onClick={() => setAvatarDraft('')}>
-                Retirer la photo
+                {t('field.removePhoto')}
               </button>
             )}
 
             <div className="profile-modal-body">
-              {userEmail && <div className="auth-connected-as" style={{ margin: '0 auto 14px' }}>Connecté avec {userEmail}</div>}
+              {userEmail && <div className="auth-connected-as" style={{ margin: '0 auto 14px' }}>{t('field.connectedAs', { email: userEmail })}</div>}
 
               <div className="field-row">
                 <div className="field">
-                  <FieldLabel icon={User}>Prénom *</FieldLabel>
+                  <FieldLabel icon={User}>{t('field.firstName')}</FieldLabel>
                   <input
                     autoFocus
                     value={nameDraft}
@@ -4532,7 +4698,7 @@ export default function RezoApp() {
                   />
                 </div>
                 <div className="field">
-                  <FieldLabel icon={User}>Nom *</FieldLabel>
+                  <FieldLabel icon={User}>{t('field.lastName')}</FieldLabel>
                   <input
                     value={lastNameDraft}
                     onChange={(e) => setLastNameDraft(e.target.value)}
@@ -4541,13 +4707,12 @@ export default function RezoApp() {
                 </div>
               </div>
               <span className="field-hint">
-                Seul ton prénom est visible sur les cartes, avatars et messages — ton nom reste
-                privé, sauf si tu l'affiches publiquement depuis Paramètres → Confidentialité.
+                {t('field.nameVisibilityHint')}
               </span>
 
               <div className="field-row">
                 <div className="field">
-                  <FieldLabel icon={Globe}>Pays *</FieldLabel>
+                  <FieldLabel icon={Globe}>{t('field.country')}</FieldLabel>
                   <select value={countryDraft} onChange={(e) => { setCountryDraft(e.target.value); setCityDraft(''); }}>
                     {COUNTRIES.map((c) => (
                       <option key={c} value={c}>{c}</option>
@@ -4555,7 +4720,7 @@ export default function RezoApp() {
                   </select>
                 </div>
                 <div className="field">
-                  <FieldLabel icon={MapPin}>Ville</FieldLabel>
+                  <FieldLabel icon={MapPin}>{t('field.city')}</FieldLabel>
                   <input
                     list="rezo-city-options"
                     value={cityDraft}
@@ -4571,7 +4736,7 @@ export default function RezoApp() {
               </div>
 
               <div className="field">
-                <FieldLabel icon={Phone}>Numéro de téléphone (optionnel)</FieldLabel>
+                <FieldLabel icon={Phone}>{t('field.phoneOptional')}</FieldLabel>
                 <div className="phone-verify-row">
                   <input
                     type="tel"
@@ -4581,7 +4746,7 @@ export default function RezoApp() {
                   />
                   {phoneVerifiedDraft ? (
                     <span className="verified-pill">
-                      <ShieldCheck size={13} /> Vérifié
+                      <ShieldCheck size={13} /> {t('card.verified')}
                     </span>
                   ) : (
                     <button
@@ -4590,20 +4755,20 @@ export default function RezoApp() {
                       disabled={!phoneDraft.trim() || verifyBusy}
                       onClick={requestPhoneVerification}
                     >
-                      {verifyBusy && !verifyCodeSent ? 'Envoi…' : 'Vérifier'}
+                      {verifyBusy && !verifyCodeSent ? t('field.sending') : t('field.verify')}
                     </button>
                   )}
                 </div>
                 {verifyCodeSent && !phoneVerifiedDraft && (
                   <div className="verify-code-box">
                     <div className="verify-code-hint">
-                      Code de démo (SMS non branché) : <strong>{verifyDevCode}</strong>
+                      {t('field.demoCodeNoSms')} <strong>{verifyDevCode}</strong>
                     </div>
                     <div className="phone-verify-row">
                       <input
                         value={verifyCodeInput}
                         onChange={(e) => setVerifyCodeInput(e.target.value)}
-                        placeholder="Code à 6 chiffres"
+                        placeholder={t('field.sixDigitCode')}
                         maxLength={6}
                       />
                       <button
@@ -4612,19 +4777,18 @@ export default function RezoApp() {
                         disabled={!verifyCodeInput.trim() || verifyBusy}
                         onClick={confirmPhoneVerification}
                       >
-                        {verifyBusy ? '…' : 'Confirmer'}
+                        {verifyBusy ? t('field.confirming') : t('field.confirmCode')}
                       </button>
                     </div>
                   </div>
                 )}
                 <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                  Un numéro vérifié affiche un badge "Vérifié" sur tes rencontres — rassure les
-                  autres membres, surtout pour les rencontres 100% Femmes/Hommes.
+                  {t('field.verifiedHint')}
                 </span>
               </div>
 
               <div className="field">
-                <label>Sexe *</label>
+                <label>{t('field.gender')}</label>
                 <div className="gender-options">
                   {GENDER_OPTIONS.map((g) => (
                     <button
@@ -4633,13 +4797,13 @@ export default function RezoApp() {
                       className={`gender-btn ${genderDraft === g.id ? 'active' : ''}`}
                       onClick={() => setGenderDraft(g.id)}
                     >
-                      {g.label}
+                      {gLabel(g.id)}
                     </button>
                   ))}
                 </div>
               </div>
               <div className="field">
-                <label>Activités qui t'intéressent * (au moins une)</label>
+                <label>{t('field.activitiesLabel')}</label>
                 <div className="pref-options">
                   {ACTIVITIES.map((a) => (
                     <button
@@ -4649,19 +4813,19 @@ export default function RezoApp() {
                       onClick={() => togglePreference(a.id)}
                     >
                       <span className="swatch" style={{ background: a.color }}></span>
-                      {a.label}
+                      {aLabel(a.id)}
                     </button>
                   ))}
                 </div>
               </div>
 
               <div className="field">
-                <FieldLabel icon={AlignLeft}>Bio (optionnel)</FieldLabel>
+                <FieldLabel icon={AlignLeft}>{t('field.bio')}</FieldLabel>
                 <textarea
                   value={bioDraft}
                   maxLength={280}
                   onChange={(e) => setBioDraft(e.target.value)}
-                  placeholder="Parle un peu de toi…"
+                  placeholder={t('profile.bioPlaceholder')}
                 />
                 <span style={{ fontSize: 11, color: 'var(--muted)' }}>{bioDraft.length}/280</span>
               </div>
@@ -4677,8 +4841,8 @@ export default function RezoApp() {
                 }
                 onClick={confirmName}
               >
-                <Check size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-                Continuer
+                <Check size={14} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
+                {t('field.continue')}
               </button>
             </div>
           </div>
@@ -4692,10 +4856,10 @@ export default function RezoApp() {
               className="profile-page-cover"
               style={userCover ? { backgroundImage: `url(${userCover})` } : undefined}
             ></div>
-            <button className="profile-page-nav-btn profile-page-back" onClick={() => setShowProfilePage(false)} title="Retour">
-              <ChevronRight size={18} style={{ transform: 'rotate(180deg)' }} />
+            <button className="profile-page-nav-btn profile-page-back" onClick={() => setShowProfilePage(false)} title={t('auth.back')}>
+              <ChevronRight size={18} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)' }} />
             </button>
-            <button className="profile-page-nav-btn profile-page-settings" onClick={() => setShowSettingsSheet(true)} title="Paramètres">
+            <button className="profile-page-nav-btn profile-page-settings" onClick={() => setShowSettingsSheet(true)} title={t('settings.title')}>
               <Settings size={18} />
             </button>
 
@@ -4707,8 +4871,8 @@ export default function RezoApp() {
               <div className="profile-page-name">
                 {userName} {userLastName}
                 {userPhoneVerified && (
-                  <span className="card-verified-badge" title="Compte vérifié">
-                    <ShieldCheck size={13} /> Vérifié
+                  <span className="card-verified-badge" title={t('card.verified')}>
+                    <ShieldCheck size={13} /> {t('card.verified')}
                   </span>
                 )}
               </div>
@@ -4729,21 +4893,21 @@ export default function RezoApp() {
                   onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
                 >
                   <div className="profile-stat-value">{organizedCount}</div>
-                  <div className="profile-stat-label">Organisées</div>
+                  <div className="profile-stat-label">{t('profile.organized')}</div>
                 </button>
                 <button
                   className="profile-stat"
                   onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
                 >
                   <div className="profile-stat-value">{participatedCount}</div>
-                  <div className="profile-stat-label">Terminées</div>
+                  <div className="profile-stat-label">{t('profile.completed')}</div>
                 </button>
                 <button
                   className="profile-stat"
                   onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
                 >
                   <div className="profile-stat-value">{myRatingStats ? myRatingStats.avg.toFixed(1) : '—'}</div>
-                  <div className="profile-stat-label">{myRatingStats ? 'Note moyenne' : 'Avis reçus'}</div>
+                  <div className="profile-stat-label">{myRatingStats ? t('profile.avgRating') : t('profile.reviewsReceived')}</div>
                 </button>
               </div>
 
@@ -4751,7 +4915,7 @@ export default function RezoApp() {
 
               {userPreferences.length > 0 && (
                 <div className="profile-section">
-                  <div className="profile-section-title">Activités préférées</div>
+                  <div className="profile-section-title">{t('profile.preferredActivities')}</div>
                   <div className="profile-activity-tags">
                     {userPreferences.map((id) => {
                       const a = activityById(id);
@@ -4761,7 +4925,7 @@ export default function RezoApp() {
                           className="profile-activity-tag"
                           style={{ background: `${a.color}22`, color: a.color, border: `1px solid ${a.color}55` }}
                         >
-                          {a.label}
+                          {aLabel(id)}
                         </span>
                       );
                     })}
@@ -4770,7 +4934,7 @@ export default function RezoApp() {
               )}
 
               <div className="profile-section">
-                <div className="profile-section-title">Badges</div>
+                <div className="profile-section-title">{t('profile.badges')}</div>
                 <div className="profile-badges-grid">
                   {PROFILE_BADGES.map((b) => {
                     const BadgeIcon = b.icon;
@@ -4787,18 +4951,18 @@ export default function RezoApp() {
 
               <div className="profile-section">
                 <div className="profile-section-title-row">
-                  <div className="profile-section-title">Historique</div>
+                  <div className="profile-section-title">{t('profile.history')}</div>
                   {profileHistory.length > 0 && (
                     <button
                       className="profile-section-link"
                       onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
                     >
-                      Voir tout <ChevronRight size={13} />
+                      {t('profile.viewAll')} <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none' }} />
                     </button>
                   )}
                 </div>
                 {profileHistory.length === 0 ? (
-                  <div className="near-city-empty">Aucune rencontre terminée pour l'instant.</div>
+                  <div className="near-city-empty">{t('profile.noHistory')}</div>
                 ) : (
                   <div className="profile-history-list">
                     {profileHistory.map((m) => (
@@ -4807,7 +4971,7 @@ export default function RezoApp() {
                         <div className="profile-history-mid">
                           <div className="profile-history-title">{m.title}</div>
                           <div className="profile-history-meta">
-                            {formatWhen(m.datetime)} · {m.host === userName ? 'Organisée' : 'Participé·e'}
+                            {formatWhen(m.datetime, language)} · {m.host === userName ? t('profile.organizedRole') : t('profile.participatedRole')}
                           </div>
                         </div>
                       </div>
@@ -4825,8 +4989,8 @@ export default function RezoApp() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title">
-                <Settings size={15} style={{ verticalAlign: '-2px', marginRight: 7 }} />
-                Paramètres
+                <Settings size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7 }} />
+                {t('settings.title')}
               </div>
               <button className="modal-close" onClick={() => setShowSettingsSheet(false)}><X size={18} /></button>
             </div>
@@ -4836,18 +5000,29 @@ export default function RezoApp() {
               className="settings-row"
               onClick={() => { setShowSettingsSheet(false); openProfile(); }}
             >
-              <Pencil size={15} /> Modifier le profil
-              <ChevronRight size={14} className="settings-row-chevron" />
+              <Pencil size={15} /> {t('settings.editProfile')}
+              <ChevronRight size={14} className="settings-row-chevron" style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none' }} />
             </button>
+
+            <div className="settings-row settings-row-lang">
+              <Globe size={15} /> {t('settings.language')}
+              <LanguageMenu
+                language={language}
+                onChange={setLanguage}
+                open={langMenuOpen}
+                onToggle={() => setLangMenuOpen((v) => !v)}
+                align="right"
+              />
+            </div>
 
             {isPushSupported() && userEmail && (
               <div className="switch-row">
                 <div>
                   <div className="switch-title">
-                    {pushEnabled ? <Bell size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} /> : <BellOff size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />}
-                    Notifications push
+                    {pushEnabled ? <Bell size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 4 }} /> : <BellOff size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 4 }} />}
+                    {t('settings.notifications')}
                   </div>
-                  <div className="switch-subtitle">Demandes, acceptations, arrivées — en temps réel</div>
+                  <div className="switch-subtitle">{t('settings.notificationsSub')}</div>
                 </div>
                 <button
                   className={`switch ${pushEnabled ? 'on' : ''}`}
@@ -4861,11 +5036,11 @@ export default function RezoApp() {
               </div>
             )}
 
-            <div className="settings-section-label">Confidentialité</div>
+            <div className="settings-section-label">{t('settings.privacy')}</div>
             <div className="switch-row">
               <div>
-                <div className="switch-title">Afficher mon nom complet</div>
-                <div className="switch-subtitle">Sinon, seul ton prénom apparaît aux autres membres</div>
+                <div className="switch-title">{t('settings.showFullName')}</div>
+                <div className="switch-subtitle">{t('settings.showFullNameSub')}</div>
               </div>
               <button
                 className={`switch ${userShowLastName ? 'on' : ''}`}
@@ -4878,8 +5053,8 @@ export default function RezoApp() {
             </div>
             <div className="switch-row">
               <div>
-                <div className="switch-title">Afficher ma ville</div>
-                <div className="switch-subtitle">Sinon, ta ville reste privée</div>
+                <div className="switch-title">{t('settings.showCity')}</div>
+                <div className="switch-subtitle">{t('settings.showCitySub')}</div>
               </div>
               <button
                 className={`switch ${userShowCity ? 'on' : ''}`}
@@ -4896,8 +5071,8 @@ export default function RezoApp() {
               className="modal-cancel settings-logout-btn"
               onClick={() => { setShowSettingsSheet(false); logout(); }}
             >
-              <LogOut size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-              Se déconnecter
+              <LogOut size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
+              {t('settings.logout')}
             </button>
           </div>
         </div>
@@ -4907,11 +5082,11 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><Trash2 size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--danger)' }} />Supprimer cette rencontre ?</div>
+              <div className="modal-title"><Trash2 size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--danger)' }} />{t('modal.delete.title')}</div>
               <button className="modal-close" onClick={() => setConfirmDeleteId(null)}><X size={18} /></button>
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
-              Cette action est définitive. Les participants ne seront plus prévenus.
+              {t('modal.delete.body')}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -4919,10 +5094,10 @@ export default function RezoApp() {
                 style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)' }}
                 onClick={() => setConfirmDeleteId(null)}
               >
-                Annuler
+                {t('modal.cancel')}
               </button>
               <button className="modal-submit modal-submit-danger" onClick={() => deleteMeetup(confirmDeleteId)}>
-                Supprimer
+                {t('modal.delete.confirm')}
               </button>
             </div>
           </div>
@@ -4933,11 +5108,11 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><Flag size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />Signaler "{reportingMeetup.title}"</div>
+              <div className="modal-title"><Flag size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--amber)' }} />{t('modal.report.title', { title: reportingMeetup.title })}</div>
               <button className="modal-close" onClick={() => setReportingMeetup(null)}><X size={18} /></button>
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 12.5, marginBottom: 14 }}>
-              Choisis le motif qui correspond le mieux. L'équipe est notifiée dès qu'un signalement est reçu.
+              {t('modal.report.body')}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {REPORT_REASONS.map((reason) => (
@@ -4947,12 +5122,12 @@ export default function RezoApp() {
                   style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', textAlign: 'left' }}
                   onClick={() => submitReport(reportingMeetup, reason)}
                 >
-                  {reason}
+                  {t(`report.${reason}`)}
                 </button>
               ))}
             </div>
             <button className="modal-cancel" onClick={() => setReportingMeetup(null)}>
-              Annuler
+              {t('modal.cancel')}
             </button>
           </div>
         </div>
@@ -4962,33 +5137,33 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><UserPlus size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />Inviter des amis</div>
+              <div className="modal-title"><UserPlus size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />{t('modal.invite.title')}</div>
               <button className="modal-close" onClick={() => setInvitingMeetup(null)}><X size={18} /></button>
             </div>
 
             <div className="field">
-              <label>Partager la rencontre</label>
+              <label>{t('invite.shareTitle')}</label>
               <div className="invite-preview">{inviteShareText(invitingMeetup)}</div>
               <div className="invite-share-row">
                 <button className="avatar-upload-btn" onClick={() => copyInviteText(invitingMeetup)}>
-                  <Copy size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-                  Copier le message
+                  <Copy size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
+                  {t('invite.copyMessage')}
                 </button>
                 <button className="avatar-upload-btn" onClick={() => shareInvite(invitingMeetup)}>
-                  <Share2 size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-                  Partager
+                  <Share2 size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
+                  {t('invite.share')}
                 </button>
               </div>
             </div>
 
             <div className="field">
-              <label>Ou ajoute directement un·e ami·e par son prénom</label>
+              <label>{t('invite.addFriendLabel')}</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
                   value={inviteNameDraft}
                   onChange={(e) => setInviteNameDraft(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && inviteFriendByName(invitingMeetup)}
-                  placeholder="Prénom de ton ami·e"
+                  placeholder={t('invite.friendPlaceholder')}
                   style={{ flex: 1 }}
                 />
                 <button
@@ -4997,15 +5172,15 @@ export default function RezoApp() {
                   disabled={!inviteNameDraft.trim()}
                   onClick={() => inviteFriendByName(invitingMeetup)}
                 >
-                  Inviter
+                  {t('invite.inviteBtn')}
                 </button>
               </div>
               <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                Il/elle apparaîtra en attente de validation par l'organisateur, avec la mention "invité·e par toi".
+                {t('invite.pendingHint')}
               </span>
             </div>
             <button className="modal-cancel" onClick={() => setInvitingMeetup(null)}>
-              Fermer
+              {t('modal.close')}
             </button>
           </div>
         </div>
@@ -5015,17 +5190,17 @@ export default function RezoApp() {
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><Star size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />Ton avis sur "{ratingMeetup.title}"</div>
+              <div className="modal-title"><Star size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--amber)' }} />{t('modal.rate.title', { title: ratingMeetup.title })}</div>
               <button className="modal-close" onClick={() => dismissRatingPrompt(ratingMeetup.id)}><X size={18} /></button>
             </div>
 
             <div className="field" style={{ alignItems: 'center', textAlign: 'center' }}>
-              <label>Note pour l'organisateur ({ratingMeetup.host})</label>
+              <label>{t('modal.rate.hostLabel', { host: ratingMeetup.host })}</label>
               <StarPicker value={ratingHostStars} onChange={setRatingHostStars} />
             </div>
 
             <div className="field" style={{ alignItems: 'center', textAlign: 'center' }}>
-              <label>Satisfaction globale de la rencontre</label>
+              <label>{t('modal.rate.satisfactionLabel')}</label>
               <StarPicker value={ratingSatisfactionStars} onChange={setRatingSatisfactionStars} />
             </div>
 
@@ -5034,10 +5209,10 @@ export default function RezoApp() {
               disabled={!ratingHostStars || !ratingSatisfactionStars}
               onClick={() => submitRating(ratingMeetup)}
             >
-              Envoyer mon avis
+              {t('modal.rate.submit')}
             </button>
             <button className="modal-cancel" onClick={() => dismissRatingPrompt(ratingMeetup.id)}>
-              Plus tard
+              {t('modal.later')}
             </button>
           </div>
         </div>
@@ -5048,15 +5223,15 @@ export default function RezoApp() {
           <div className="modal">
             <div className="modal-header">
               <div className="modal-title">
-                <Radio size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
-                "{ongoingCheckMeetup.title}" est-elle toujours en cours ?
+                <Radio size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />
+                {t('modal.ongoing.title', { title: ongoingCheckMeetup.title })}
               </div>
               <button className="modal-close" onClick={() => setOngoingCheckMeetup(null)}><X size={18} /></button>
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
               {meetupCheckinDueAt(ongoingCheckMeetup) !== null && now >= meetupCheckinDueAt(ongoingCheckMeetup)
-                ? 'Elle a débuté il y a plus de 30 minutes. Dis-nous où ça en est pour prévenir les participants.'
-                : 'Confirme pour prévenir les participants — cela déclenchera leur invitation à laisser un avis.'}
+                ? t('modal.ongoing.bodyOverdue')
+                : t('modal.ongoing.bodyEarly')}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -5064,14 +5239,14 @@ export default function RezoApp() {
                 style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)' }}
                 onClick={() => confirmStillOngoing(ongoingCheckMeetup)}
               >
-                Encore en cours
+                {t('modal.ongoing.stillGoing')}
               </button>
               <button className="modal-submit" onClick={() => closeMeetupNow(ongoingCheckMeetup)}>
-                Terminée
+                {t('modal.ongoing.finished')}
               </button>
             </div>
             <button className="modal-cancel" onClick={() => setOngoingCheckMeetup(null)}>
-              Annuler
+              {t('modal.cancel')}
             </button>
           </div>
         </div>
@@ -5082,7 +5257,7 @@ export default function RezoApp() {
           <div className="modal live-modal">
             <div className="modal-header">
               <div>
-                <div className="modal-title"><Navigation size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />Mon trajet</div>
+                <div className="modal-title"><Navigation size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />{t('journey.title')}</div>
                 <div className="chat-subtitle">{journeyMeetup.title}</div>
               </div>
               <button
@@ -5104,28 +5279,29 @@ export default function RezoApp() {
                     <StarDisplay value={hostRatingStats(journeyMeetup.host).avg} count={hostRatingStats(journeyMeetup.host).count} size={11} />
                   )}
                 </div>
-                <div className="live-host-sub">Organisateur · {journeyMeetup.location || journeyMeetup.zone || 'Lieu à confirmer'}</div>
+                <div className="live-host-sub">{t('journey.organizer')} · {journeyMeetup.location || journeyMeetup.zone || t('card.locationTBD')}</div>
               </div>
             </div>
 
             <div className="privacy-note">
-              🔒 Ta position n'est jamais partagée avec les autres membres — seule ton arrivée sur place leur est signalée.
+              {t('journey.privacyNote')}
             </div>
 
             {userName && journeyMeetup.arrivals && journeyMeetup.arrivals[userName] ? (
               <div className="journey-arrived">
                 <div className="journey-arrived-row">
-                  <span className="live-status-chip arrived">Arrivé·e</span>
+                  <span className="live-status-chip arrived">{t('journey.arrived')}</span>
                   <span>
-                    Confirmé à{' '}
-                    {new Date(journeyMeetup.arrivals[userName]).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    {t('journey.confirmedAt', {
+                      time: new Date(journeyMeetup.arrivals[userName]).toLocaleTimeString(WHEN_LOCALES[language] || 'fr-FR', { hour: '2-digit', minute: '2-digit' }),
+                    })}
                   </span>
                 </div>
                 <button
                   className="journey-cancel-link"
                   onClick={() => cancelArrival(journeyMeetup, userName)}
                 >
-                  Annuler mon arrivée
+                  {t('journey.cancelArrival')}
                 </button>
               </div>
             ) : (
@@ -5133,10 +5309,10 @@ export default function RezoApp() {
                 {journeyActive && (
                   <div className="journey-status">
                     {journeyDistance !== null
-                      ? `En route · encore ${formatDistance(journeyDistance)}`
+                      ? t('journey.enRoute', { distance: formatDistance(journeyDistance) })
                       : journeyMeetup.coords
-                      ? 'Localisation en cours…'
-                      : "L'organisateur n'a pas épinglé le lieu exact : confirme ton arrivée manuellement en bas."}
+                      ? t('journey.locating')
+                      : t('journey.noExactLocation')}
                   </div>
                 )}
 
@@ -5151,11 +5327,11 @@ export default function RezoApp() {
                   onClick={() => (journeyActive ? stopJourney() : startJourney(journeyMeetup))}
                 >
                   <Navigation size={16} />
-                  {journeyActive ? 'Trajet en cours · Toucher pour arrêter' : 'Je pars'}
+                  {journeyActive ? t('journey.walking') : t('journey.imLeaving')}
                 </button>
 
                 <button className="journey-manual-btn" onClick={() => confirmArrivalManually(journeyMeetup)}>
-                  Je suis déjà arrivé·e
+                  {t('journey.alreadyArrived')}
                 </button>
               </>
             )}
@@ -5163,7 +5339,7 @@ export default function RezoApp() {
             {arrivalsList.length > 0 && (
               <div className="live-list">
                 <div className="filters-row-label">
-                  Déjà sur place ({arrivalsList.length}/{journeyMeetup.participants.length})
+                  {t('journey.alreadyThere', { count: arrivalsList.length, total: journeyMeetup.participants.length })}
                 </div>
                 {arrivalsList.map((p) => (
                   <div key={p.name} className="live-list-row arrived">
@@ -5171,10 +5347,10 @@ export default function RezoApp() {
                     <div className="live-list-mid">
                       <div className="live-list-name">
                         {p.name}
-                        {p.name === journeyMeetup.host && <span className="live-list-host-tag">Organisateur</span>}
+                        {p.name === journeyMeetup.host && <span className="live-list-host-tag">{t('journey.organizer')}</span>}
                       </div>
                       <div className="live-list-time">
-                        Arrivé·e à {new Date(p.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                        {t('journey.arrivedAt', { time: new Date(p.at).toLocaleTimeString(WHEN_LOCALES[language] || 'fr-FR', { hour: '2-digit', minute: '2-digit' }) })}
                       </div>
                     </div>
                     <span className="live-status-chip arrived">✓</span>
@@ -5191,9 +5367,9 @@ export default function RezoApp() {
           <div className="modal chat-modal">
             <div className="modal-header">
               <div>
-                <div className="modal-title"><MessageCircle size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />{chatMeetup.title}</div>
+                <div className="modal-title"><MessageCircle size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />{chatMeetup.title}</div>
                 <div className="chat-subtitle">
-                  {chatMeetup.participants.length} participant{chatMeetup.participants.length > 1 ? 's' : ''}
+                  {t(chatMeetup.participants.length > 1 ? 'chat.participants' : 'chat.participant', { count: chatMeetup.participants.length })}
                 </div>
               </div>
               <button className="modal-close" onClick={() => setChatMeetup(null)}><X size={18} /></button>
@@ -5202,10 +5378,10 @@ export default function RezoApp() {
             <div className="chat-messages">
               {chatLoading ? (
                 <div className="loading-state" style={{ padding: '30px 0' }}>
-                  <Loader2 size={16} className="spin" /> Chargement…
+                  <Loader2 size={16} className="spin" /> {t('chat.loading')}
                 </div>
               ) : chatMessages.length === 0 ? (
-                <div className="chat-empty">Aucun message pour l'instant. Lance la discussion !</div>
+                <div className="chat-empty">{t('chat.empty')}</div>
               ) : (
                 chatMessages.map((msg) => {
                   const mine = userName && msg.author === userName;
@@ -5216,7 +5392,7 @@ export default function RezoApp() {
                         {!mine && <div className="chat-author">{msg.author}</div>}
                         <div className="chat-text">{msg.text}</div>
                         <div className="chat-time">
-                          {new Date(msg.sentAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(msg.sentAt).toLocaleTimeString(WHEN_LOCALES[language] || 'fr-FR', { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </div>
                     </div>
@@ -5228,7 +5404,7 @@ export default function RezoApp() {
             <div className="chat-input-row">
               <input
                 className="chat-input"
-                placeholder="Écris un message…"
+                placeholder={t('chat.placeholder')}
                 value={chatInput}
                 maxLength={500}
                 onChange={(e) => setChatInput(e.target.value)}
@@ -5249,7 +5425,7 @@ export default function RezoApp() {
   );
 }
 
-function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initial, template, defaultZone }) {
+function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initial, template, defaultZone, t, aLabel, audLabel }) {
   const isEditing = !!initial;
   const [title, setTitle] = useState(initial?.title || template?.title || '');
   const [activity, setActivity] = useState(initial?.activity || template?.activity || ACTIVITIES[0].id);
@@ -5284,14 +5460,14 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
       <div className="modal">
         <div className="modal-header">
           <div className="modal-title">
-            {isEditing ? <Pencil size={15} style={{ verticalAlign: '-2px', marginRight: 7 }} /> : <Sparkles size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--amber)' }} />}
-            {isEditing ? 'Modifier la rencontre' : 'Lancer une rencontre'}
+            {isEditing ? <Pencil size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7 }} /> : <Sparkles size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--amber)' }} />}
+            {isEditing ? t('create.editTitle') : t('create.newTitle')}
           </div>
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
 
         <div className="field">
-          <FieldLabel icon={TypeIcon}>Titre</FieldLabel>
+          <FieldLabel icon={TypeIcon}>{t('create.titleLabel')}</FieldLabel>
           <input
             value={title}
             maxLength={80}
@@ -5301,24 +5477,24 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         </div>
 
         <div className="field">
-          <FieldLabel>Activité</FieldLabel>
+          <FieldLabel>{t('create.activityLabel')}</FieldLabel>
           <div className="select-with-swatch">
             <span className="swatch" style={{ background: activityById(activity).color }}></span>
             <select value={activity} onChange={(e) => setActivity(e.target.value)}>
               {ACTIVITIES.map((a) => (
-                <option key={a.id} value={a.id}>{a.label}</option>
+                <option key={a.id} value={a.id}>{aLabel(a.id)}</option>
               ))}
             </select>
           </div>
         </div>
 
         <div className="field">
-          <FieldLabel icon={MapPin}>Zone géographique</FieldLabel>
+          <FieldLabel icon={MapPin}>{t('create.zoneLabel')}</FieldLabel>
           <input value={zone} onChange={(e) => setZone(e.target.value)} placeholder="Ex: Maarif, Casablanca" />
         </div>
 
         <div className="field">
-          <FieldLabel icon={Crosshair}>Lieu précis (optionnel)</FieldLabel>
+          <FieldLabel icon={Crosshair}>{t('create.locationLabel')}</FieldLabel>
           <input
             value={location}
             maxLength={120}
@@ -5326,12 +5502,12 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
             placeholder="Ex: Terrain Al Amal, complexe sportif Anfa"
           />
           <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-            Génère un lien "Voir sur la carte" pour aider les participants à te trouver.
+            {t('create.locationHint')}
           </span>
         </div>
 
         <div className="field">
-          <FieldLabel icon={Users}>Type de rencontre</FieldLabel>
+          <FieldLabel icon={Users}>{t('create.typeLabel')}</FieldLabel>
           <div className="gender-options">
             {availableAudiences.map((a) => (
               <button
@@ -5340,19 +5516,19 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
                 className={`gender-btn ${audience === a.id ? 'active' : ''}`}
                 onClick={() => setAudience(a.id)}
               >
-                {a.short}
+                {audLabel(a.id)}
               </button>
             ))}
           </div>
           {!userGender && (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-              Ton sexe sera demandé à la validation pour confirmer ce choix.
+              {t('create.genderHint')}
             </span>
           )}
         </div>
 
         <div className="field">
-          <FieldLabel icon={Cake}>Tranche d'âge des participants</FieldLabel>
+          <FieldLabel icon={Cake}>{t('create.ageRangeLabel')}</FieldLabel>
           <div className="age-range-row">
             <input
               type="number"
@@ -5360,22 +5536,22 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
               max={99}
               value={ageMin}
               onChange={(e) => setAgeMin(e.target.value)}
-              aria-label="Âge minimum"
+              aria-label={t('create.ageMinLabel')}
             />
-            <span className="age-range-sep">à</span>
+            <span className="age-range-sep">{t('filters.ageSep')}</span>
             <input
               type="number"
               min={16}
               max={99}
               value={ageMax}
               onChange={(e) => setAgeMax(e.target.value)}
-              aria-label="Âge maximum"
+              aria-label={t('create.ageMaxLabel')}
             />
-            <span className="age-range-sep">ans</span>
+            <span className="age-range-sep">{t('filters.ageUnit')}</span>
           </div>
           {!ageRangeValid && (
             <span style={{ fontSize: 11, color: 'var(--amber)' }}>
-              Âge minimum 16 ans, et l'âge max doit être ≥ à l'âge min.
+              {t('create.ageRangeError')}
             </span>
           )}
         </div>
@@ -5390,21 +5566,21 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
               style={{ width: 'auto' }}
             />
             <label htmlFor="useLocation" style={{ margin: 0 }}>
-              Épingler ma position GPS actuelle sur cette rencontre
+              {t('create.pinLocation')}
             </label>
           </div>
         )}
 
         <div className="field">
-          <FieldLabel icon={Clock}>Date et heure</FieldLabel>
+          <FieldLabel icon={Clock}>{t('create.dateTimeLabel')}</FieldLabel>
           <input type="datetime-local" value={datetime} onChange={(e) => setDatetime(e.target.value)} />
           {!dateIsFuture && (
-            <span style={{ fontSize: 11, color: 'var(--amber)' }}>La date doit être dans le futur.</span>
+            <span style={{ fontSize: 11, color: 'var(--amber)' }}>{t('create.dateFutureError')}</span>
           )}
         </div>
 
         <div className="field">
-          <FieldLabel icon={Users}>Nombre de places</FieldLabel>
+          <FieldLabel icon={Users}>{t('create.spotsLabel')}</FieldLabel>
           <input
             type="number"
             min={minParticipants}
@@ -5414,18 +5590,18 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
           />
           {isEditing && minParticipants > 2 && (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-              Ne peut pas descendre sous {minParticipants} (participants déjà inscrits).
+              {t('create.spotsMinHint', { min: minParticipants })}
             </span>
           )}
         </div>
 
         <div className="field">
-          <FieldLabel icon={AlignLeft}>Détails (optionnel)</FieldLabel>
+          <FieldLabel icon={AlignLeft}>{t('create.detailsLabel')}</FieldLabel>
           <textarea
             value={note}
             maxLength={300}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="Lieu précis, niveau, matériel à apporter…"
+            placeholder={t('create.detailsPlaceholder')}
           />
         </div>
 
@@ -5434,7 +5610,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
           disabled={!canSubmit || saving}
           onClick={() => onSubmit({ title, activity, zone, location, datetime, maxParticipants, note, useLocation, audience, ageMin, ageMax })}
         >
-          {saving ? 'Enregistrement…' : isEditing ? 'Enregistrer les modifications' : 'Créer la rencontre'}
+          {saving ? t('create.saving') : isEditing ? t('create.saveEdit') : t('create.submit')}
         </button>
       </div>
     </div>

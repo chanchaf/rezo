@@ -181,6 +181,38 @@ un prototype d'écran d'auth ; **avant toute mise en production**, le
 remplacer par une vraie authentification serveur (Firebase Auth, Supabase
 Auth, NextAuth, etc.) qui hache et vérifie les mots de passe côté serveur.
 
+## Langue et RTL
+
+Sélecteur de langue (drapeau + code, ex: 🇫🇷 FR) discret en haut de l'écran de
+connexion, et dans Profil → Paramètres → Langue une fois connecté. Trois
+langues : **Français** (référence), **Anglais**, **Arabe** (RTL).
+
+- **Détection** : langue du navigateur au premier lancement (repli français
+  si non supportée) — voir `detectBrowserLanguage()` dans `src/lib/i18n.js`.
+- **Persistance** : par appareil (`rezo-language`) tant qu'aucun compte n'est
+  connecté ; synchronisée dans le compte (`accounts[id].language`) dès la
+  connexion, pour retrouver la même langue sur tous ses appareils — voir
+  `setLanguage()` dans `App.jsx`.
+- **RTL réel, pas juste des mots inversés** : l'attribut `dir="rtl"` posé sur
+  `.rezo-app` inverse nativement le texte, la ponctuation et l'ordre des
+  listes, et les conteneurs `flex-direction: row` (utilisés partout dans
+  l'app) suivent aussi l'axe d'écriture — donc l'essentiel de la mise en page
+  s'inverse sans code supplémentaire. Les endroits câblés en position/marge
+  physique (`left`/`right`, icônes de navigation "retour") ont des overrides
+  `[dir="rtl"]` dédiés, regroupés en bas du bloc `<style>` de `App.jsx`.
+- **Ce qui n'est jamais traduit** : le contenu créé par les utilisateurs
+  (titres de rencontre, notes, messages de chat, avis) — uniquement
+  l'interface elle-même (boutons, libellés, toasts, catégories d'activité,
+  sexe, type de rencontre...).
+- **Couverture actuelle** : très large (navigation, authentification,
+  cartes de rencontre, création/édition, page de profil, paramètres, les 5
+  fenêtres de confirmation, chat, suivi de trajet) mais pas exhaustive à
+  100 % — quelques recoins secondaires restent en français par défaut :
+  les modèles de démarrage rapide ("Foot ce soir"...), le sélecteur de
+  position de test (outil de dev), et le texte du message d'invitation
+  partagé. Dictionnaire dans `src/lib/i18n.js` (clé → FR/EN/AR) ;
+  `translate()` retombe sur le français si une clé manque dans une langue.
+
 ## Éviter la "ville fantôme" (flux vide au lancement)
 
 Un flux vide est le pire ennemi de la rétention sur ce type d'app. Trois
