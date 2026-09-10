@@ -2922,6 +2922,10 @@ export default function RezoApp() {
           align-items: baseline;
           gap: 8px;
         }
+        .rezo-header-lang {
+          position: absolute; top: calc(18px + env(safe-area-inset-top)); right: 24px; z-index: 2;
+        }
+        [dir="rtl"] .rezo-header-lang { right: auto; left: 24px; }
         .rezo-brand span.dot { color: var(--live); }
         .rezo-tagline { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 
@@ -3952,6 +3956,15 @@ export default function RezoApp() {
       {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
 
       <div className="rezo-header">
+        <div className="rezo-header-lang">
+          <LanguageMenu
+            language={language}
+            onChange={setLanguage}
+            open={langMenuOpen}
+            onToggle={() => setLangMenuOpen((v) => !v)}
+            align="right"
+          />
+        </div>
         <div>
           <div className="rezo-brand">REZO<span className="dot">·</span></div>
           <div className="rezo-tagline">{t('app.tagline')}</div>
