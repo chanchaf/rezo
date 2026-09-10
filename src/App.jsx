@@ -494,6 +494,9 @@ export default function RezoApp() {
   const [userCoords, setUserCoords] = useState(null);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState(null);
+  // Tri "près de moi" : basé sur la ville déclarée (fiable, toujours disponible), le GPS n'étant
+  // qu'un bonus optionnel pour affiner le tri à l'intérieur du groupe "même ville" (voir activateNearMe).
+  const [nearMeActive, setNearMeActive] = useState(false);
   const [radiusKm, setRadiusKm] = useState(5);
   const [manualLat, setManualLat] = useState('');
   const [manualLng, setManualLng] = useState('');
@@ -719,6 +722,12 @@ export default function RezoApp() {
       } catch (err) {
         // no coords stored yet
       }
+      try {
+        const res = await window.storage.get('rezo-near-me-active', false);
+        if (res && res.value === 'true') setNearMeActive(true);
+      } catch (err) {
+        // désactivé par défaut
+      }
     })();
   }, []);
 
@@ -901,46 +910,67 @@ export default function RezoApp() {
     showToast('Position définie manuellement.');
   };
 
-  const requestLocation = () => {
-    if (!navigator.geolocation) {
-      setLocationError("La géolocalisation n'est pas disponible sur cet appareil.");
+  // Le GPS seul n'est pas fiable (permission refusée, contexte restreint...) : la source principale
+  // de proximité est désormais la ville déclarée au profil (toujours disponible une fois
+  // renseignée), le GPS restant un bonus silencieux pour affiner le tri par distance réelle à
+  // l'intérieur du groupe "même ville" quand il est accordé.
+  const activateNearMe = () => {
+    if (!userCity) {
+      showToast('Ajoute ta ville dans ton profil pour activer ce tri.');
+      openProfile();
       return;
     }
     setLocating(true);
-    setLocationError(null);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setUserCoords(coords);
-        setLocating(false);
-        try {
-          await window.storage.set('rezo-coords', JSON.stringify(coords), false);
-        } catch (err) {
-          // best effort persistence
-        }
-        showToast('Position activée.');
-      },
-      (err) => {
-        setLocating(false);
-        setLocationError(
-          err.code === 1
-            ? 'Localisation refusée. Active-la dans les réglages du navigateur.'
-            : "Impossible d'obtenir ta position."
-        );
-      },
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
+    // Délai bref volontaire : retour visuel clair (voir demande), même si le tri par ville est
+    // instantané une fois la ville connue.
+    setTimeout(async () => {
+      setNearMeActive(true);
+      setLocating(false);
+      try {
+        await window.storage.set('rezo-near-me-active', 'true', false);
+      } catch (err) {
+        // best effort
+      }
+      showToast(`📍 Tri activé : rencontres à ${userCity} en premier.`);
+    }, 300);
+
+    // Bonus GPS best effort, en arrière-plan : n'empêche jamais le tri par ville de fonctionner
+    // (voir nearCityMeetups, qui ne dépend pas de userCoords) même en cas d'échec ou de refus.
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setUserCoords(coords);
+          setLocationError(null);
+          try {
+            await window.storage.set('rezo-coords', JSON.stringify(coords), false);
+          } catch (err) {
+            // best effort persistence
+          }
+        },
+        (err) => {
+          setLocationError(
+            err.code === 1
+              ? 'Localisation précise refusée — le tri reste basé sur ta ville.'
+              : "Position précise indisponible — le tri reste basé sur ta ville."
+          );
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
   };
 
-  const disableLocation = async () => {
+  const disableNearMe = async () => {
+    setNearMeActive(false);
     setUserCoords(null);
     setLocationError(null);
     try {
+      await window.storage.set('rezo-near-me-active', 'false', false);
       await window.storage.delete('rezo-coords', false).catch(() => {});
     } catch (err) {
       // best effort
     }
-    showToast('Position désactivée.');
+    showToast('Tri par proximité désactivé.');
   };
 
   const resetPhoneVerifyUi = () => {
@@ -1934,6 +1964,15 @@ export default function RezoApp() {
     items: filtered.filter((m) => m.activity === a.id).sort(byDistanceThenDate),
   })).filter((g) => g.items.length > 0);
 
+  // Tri "près de moi" (voir activateNearMe) : la ville déclarée reste la source de vérité — le GPS,
+  // quand disponible, n'affine que l'ordre à l'intérieur de ce groupe (byDistanceThenDate s'appuie
+  // sur _distance, calculée seulement si userCoords est renseigné). Aucun filtrage : ce groupe
+  // s'ajoute au flux normal ci-dessous, qui reste intact et complet.
+  const nearCityMeetups =
+    nearMeActive && userCity && !mineOnly
+      ? filtered.filter((m) => m.zone && m.zone.toLowerCase().includes(userCity.trim().toLowerCase())).sort(byDistanceThenDate)
+      : [];
+
   const recommended = userPreferences.length
     ? withDistance
         .filter((m) => userPreferences.includes(m.activity) && !isPast(m) && m.host !== userName)
@@ -2601,6 +2640,12 @@ export default function RezoApp() {
         .recommended-card .swatch { width: 8px; height: 8px; border-radius: 50%; }
         .recommended-card-title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.3; }
         .recommended-card-meta { font-size: 11px; color: var(--muted); }
+        .near-city-wrap .recommended-title { color: var(--live); }
+        .near-city-grid { margin-top: 2px; }
+        .near-city-empty {
+          font-size: 12.5px; color: var(--muted); background: var(--ink);
+          border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+        }
         .rezo-section { margin-top: 24px; }
         .rezo-section-title {
           font-family: 'Space Grotesk', sans-serif;
@@ -3233,12 +3278,12 @@ export default function RezoApp() {
         </div>
 
         <button
-          className={`geo-btn full ${userCoords ? 'active' : ''}`}
-          onClick={userCoords ? disableLocation : requestLocation}
+          className={`geo-btn full ${nearMeActive ? 'active' : ''}`}
+          onClick={nearMeActive ? disableNearMe : activateNearMe}
           disabled={locating}
         >
           {locating ? <Loader2 size={13} className="spin" /> : <Navigation size={13} />}
-          {userCoords ? '📍 Position activée' : locating ? 'Localisation…' : '📍 Activités proches de moi'}
+          {nearMeActive ? '📍 Tri par proximité activé' : locating ? 'Recherche…' : '📍 Activités proches de moi'}
         </button>
       </div>
         {locationError && (
@@ -3270,6 +3315,24 @@ export default function RezoApp() {
             </div>
           </div>
         )}
+
+      {nearMeActive && userCity && (
+        <div className="recommended-wrap near-city-wrap">
+          <div className="recommended-title">
+            <MapPin size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} color="var(--live)" />
+            Près de {userCity}
+          </div>
+          {nearCityMeetups.length > 0 ? (
+            <div className="rezo-grid near-city-grid">
+              {nearCityMeetups.map((m) => renderMeetupCard(m))}
+            </div>
+          ) : (
+            <div className="near-city-empty">
+              Rien à {userCity} pour l'instant, voici les autres rencontres ci-dessous.
+            </div>
+          )}
+        </div>
+      )}
 
       {recommended.length > 0 && (
         <div className="recommended-wrap">
