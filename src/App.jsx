@@ -4,7 +4,7 @@ import {
   Flag, SlidersHorizontal, Dumbbell, Palette, Music, Gamepad2, HeartPulse, UtensilsCrossed, Sparkles, Search,
   UserPlus, Copy, Share2, Star, ExternalLink, Home, Bookmark, Compass, User, Mail, Lock, LogOut, Eye, EyeOff,
   Trash2, Type as TypeIcon, AlignLeft, Heart, Activity, Mountain, Film, Plane, Camera, BookOpen, Cpu, Briefcase,
-  Languages, PawPrint, Baby, Cake, Bell, BellOff, Flame, Award, ShieldCheck, Phone,
+  Languages, PawPrint, Baby, Cake, Bell, BellOff, Flame, Award, ShieldCheck, Phone, Globe,
 } from 'lucide-react';
 import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscribeFromPush, notifyByName } from './lib/push.js';
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
@@ -145,6 +145,45 @@ const AUDIENCE_OPTIONS = [
   { id: 'femmes', label: '100% Femmes', short: '100% Femmes' },
   { id: 'hommes', label: '100% Hommes', short: '100% Hommes' },
 ];
+
+// REZO cible d'abord le Maroc (voir le contenu de démarrage) : liste resserrée mais couvrant les
+// pays francophones/voisins les plus probables, plutôt qu'une liste ISO exhaustive peu lisible.
+const COUNTRIES = [
+  'Maroc', 'France', 'Espagne', 'Belgique', 'Algérie', 'Tunisie', 'Canada', 'Suisse', 'Autre',
+];
+
+// Villes proposées en autocomplétion (`<datalist>`) selon le pays choisi — reste un champ texte
+// libre : ces listes n'ont pas besoin d'être exhaustives, seulement d'accélérer la saisie.
+const CITIES_BY_COUNTRY = {
+  Maroc: [
+    'Casablanca', 'Rabat', 'Marrakech', 'Fès', 'Tanger', 'Agadir', 'Meknès', 'Oujda',
+    'Kénitra', 'Tétouan', 'Salé', 'Nador', 'El Jadida', 'Béni Mellal', 'Essaouira',
+  ],
+  France: ['Paris', 'Lyon', 'Marseille', 'Toulouse', 'Bordeaux', 'Lille', 'Nantes', 'Strasbourg'],
+  Espagne: ['Madrid', 'Barcelone', 'Valence', 'Séville', 'Malaga'],
+  Belgique: ['Bruxelles', 'Anvers', 'Liège', 'Gand'],
+  Algérie: ['Alger', 'Oran', 'Constantine'],
+  Tunisie: ['Tunis', 'Sfax', 'Sousse'],
+  Canada: ['Montréal', 'Toronto', 'Québec', 'Ottawa'],
+  Suisse: ['Genève', 'Lausanne', 'Zurich'],
+  Autre: [],
+};
+
+// Devine le pays via géolocalisation IP (best effort, pas de clé requise) pour pré-sélectionner le
+// champ Pays à l'inscription ; le Maroc reste le repli par défaut si ça échoue ou prend trop de temps.
+async function guessCountryFromIP() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch('https://ipapi.co/country_name/', { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return 'Maroc';
+    const name = (await res.text()).trim();
+    return COUNTRIES.includes(name) ? name : name || 'Maroc';
+  } catch (err) {
+    return 'Maroc';
+  }
+}
 
 const BADGE_THRESHOLD = 3;
 
@@ -409,6 +448,13 @@ export default function RezoApp() {
   const [ageFilterMin, setAgeFilterMin] = useState(16);
   const [ageFilterMax, setAgeFilterMax] = useState(99);
   const [userName, setUserName] = useState(null);
+  // Nom de famille : donnée de profil privée par défaut (voir publicLastNames pour l'affichage
+  // public optionnel) — userName reste le prénom, seul affiché sur les cartes/avatars/chat.
+  const [userLastName, setUserLastName] = useState(null);
+  const [userCountry, setUserCountry] = useState(null);
+  const [userCity, setUserCity] = useState(null);
+  const [userShowLastName, setUserShowLastName] = useState(false);
+  const [publicLastNames, setPublicLastNames] = useState({});
   const [userGender, setUserGender] = useState(null);
   const [userPreferences, setUserPreferences] = useState([]);
   const [userAvatar, setUserAvatar] = useState(null);
@@ -433,6 +479,10 @@ export default function RezoApp() {
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
+  const [lastNameDraft, setLastNameDraft] = useState('');
+  const [countryDraft, setCountryDraft] = useState('Maroc');
+  const [cityDraft, setCityDraft] = useState('');
+  const [showLastNameDraft, setShowLastNameDraft] = useState(false);
   const [genderDraft, setGenderDraft] = useState('');
   const [preferencesDraft, setPreferencesDraft] = useState([]);
   const [avatarDraft, setAvatarDraft] = useState(null);
@@ -549,17 +599,31 @@ export default function RezoApp() {
     }
   }, []);
 
+  // Prénom -> nom de famille, UNIQUEMENT pour les personnes ayant explicitement choisi de
+  // l'afficher publiquement (voir confirmName) — registre partagé, chargé comme profilesMap.
+  const loadPublicLastNames = useCallback(async (silent) => {
+    try {
+      const res = await window.storage.get('public-lastnames', true);
+      const map = res && res.value ? JSON.parse(res.value) : {};
+      setPublicLastNames(map && typeof map === 'object' ? map : {});
+    } catch (err) {
+      if (!silent) setPublicLastNames({});
+    }
+  }, []);
+
   useEffect(() => {
     loadMeetups(false);
     loadProfiles(false);
     loadVerified(false);
+    loadPublicLastNames(false);
     const interval = setInterval(() => {
       if (!savingRef.current) loadMeetups(true);
       loadProfiles(true);
       loadVerified(true);
+      loadPublicLastNames(true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadMeetups, loadProfiles, loadVerified]);
+  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames]);
 
   // Détecte les nouvelles arrivées à chaque rafraîchissement et notifie les membres concernés
   // (pas de partage de position continue : uniquement l'événement "est arrivé·e").
@@ -594,6 +658,30 @@ export default function RezoApp() {
         if (res && res.value) setUserName(res.value);
       } catch (err) {
         // no name stored yet
+      }
+      try {
+        const res = await window.storage.get('rezo-lastname', false);
+        if (res && res.value) setUserLastName(res.value);
+      } catch (err) {
+        // no last name stored yet
+      }
+      try {
+        const res = await window.storage.get('rezo-country', false);
+        if (res && res.value) setUserCountry(res.value);
+      } catch (err) {
+        // no country stored yet
+      }
+      try {
+        const res = await window.storage.get('rezo-city', false);
+        if (res && res.value) setUserCity(res.value);
+      } catch (err) {
+        // no city stored yet
+      }
+      try {
+        const res = await window.storage.get('rezo-show-lastname', false);
+        if (res && res.value === 'true') setUserShowLastName(true);
+      } catch (err) {
+        // opt-in par défaut désactivé
       }
       try {
         const res = await window.storage.get('rezo-gender', false);
@@ -862,9 +950,13 @@ export default function RezoApp() {
   };
 
   const openProfile = () => {
-    if (userEmail && userName && userGender && userPreferences.length > 0) {
+    if (userEmail && userName && userLastName && userGender && userPreferences.length > 0) {
       setPendingAction(null);
       setNameDraft(userName);
+      setLastNameDraft(userLastName);
+      setCountryDraft(userCountry || 'Maroc');
+      setCityDraft(userCity || '');
+      setShowLastNameDraft(userShowLastName);
       setGenderDraft(userGender);
       setPreferencesDraft(userPreferences);
       setAvatarDraft(null);
@@ -878,9 +970,9 @@ export default function RezoApp() {
   };
 
   // Porte d'entrée avant toute action nécessitant une identité : d'abord un compte
-  // (e-mail + mot de passe), puis obligatoirement le profil (prénom, sexe, activités).
+  // (e-mail + mot de passe), puis obligatoirement le profil (nom, prénom, sexe, activités).
   const requireName = (action) => {
-    if (userEmail && userName && userGender && userPreferences.length > 0) {
+    if (userEmail && userName && userLastName && userGender && userPreferences.length > 0) {
       action(userName, userGender);
       return;
     }
@@ -896,6 +988,10 @@ export default function RezoApp() {
       return;
     }
     setNameDraft(userName || '');
+    setLastNameDraft(userLastName || '');
+    setCountryDraft(userCountry || 'Maroc');
+    setCityDraft(userCity || '');
+    setShowLastNameDraft(userShowLastName);
     setGenderDraft(userGender || '');
     setPreferencesDraft(userPreferences.length > 0 ? userPreferences : []);
     setAvatarDraft(null);
@@ -935,6 +1031,10 @@ export default function RezoApp() {
       setUserEmail(email);
       setShowAuthModal(false);
       setNameDraft('');
+      setLastNameDraft('');
+      setCountryDraft('Maroc');
+      setCityDraft('');
+      setShowLastNameDraft(false);
       setGenderDraft('');
       setPreferencesDraft([]);
       setAvatarDraft(null);
@@ -942,6 +1042,10 @@ export default function RezoApp() {
       setPhoneVerifiedDraft(false);
       resetPhoneVerifyUi();
       setShowNameModal(true);
+      // Pré-sélection best effort du pays (géoloc IP) : n'écrase pas un choix déjà fait entre-temps.
+      guessCountryFromIP().then((guessed) => {
+        setCountryDraft((current) => (current === 'Maroc' ? guessed : current));
+      });
     } catch (err) {
       setAuthError(isNetworkError(err) ? SERVER_UNREACHABLE_MESSAGE : 'Erreur lors de la création du compte, réessaie.');
     } finally {
@@ -971,6 +1075,10 @@ export default function RezoApp() {
         return;
       }
       const name = account.name || '';
+      const lastName = account.lastName || '';
+      const country = account.country || 'Maroc';
+      const city = account.city || '';
+      const showLastName = !!account.showLastNamePublicly;
       const gender = account.gender || '';
       const preferences = account.preferences || [];
       const avatar = account.avatar || null;
@@ -978,6 +1086,10 @@ export default function RezoApp() {
       const phoneVerified = !!account.phoneVerified;
       await window.storage.set('rezo-email', email, false);
       if (name) await window.storage.set('rezo-username', name, false);
+      if (lastName) await window.storage.set('rezo-lastname', lastName, false);
+      await window.storage.set('rezo-country', country, false);
+      if (city) await window.storage.set('rezo-city', city, false);
+      await window.storage.set('rezo-show-lastname', showLastName ? 'true' : 'false', false);
       if (gender) await window.storage.set('rezo-gender', gender, false);
       if (preferences.length) await window.storage.set('rezo-preferences', JSON.stringify(preferences), false);
       if (avatar) await window.storage.set('rezo-avatar', avatar, false);
@@ -985,6 +1097,10 @@ export default function RezoApp() {
       await window.storage.set('rezo-phone-verified', phoneVerified ? 'true' : 'false', false);
       setUserEmail(email);
       setUserName(name || null);
+      setUserLastName(lastName || null);
+      setUserCountry(country);
+      setUserCity(city || null);
+      setUserShowLastName(showLastName);
       setUserGender(gender || null);
       setUserPreferences(preferences);
       setUserAvatar(avatar);
@@ -992,6 +1108,10 @@ export default function RezoApp() {
       setUserPhoneVerified(phoneVerified);
       setShowAuthModal(false);
       setNameDraft(name);
+      setLastNameDraft(lastName);
+      setCountryDraft(country);
+      setCityDraft(city);
+      setShowLastNameDraft(showLastName);
       setGenderDraft(gender);
       setPreferencesDraft(preferences);
       setAvatarDraft(null);
@@ -1014,6 +1134,10 @@ export default function RezoApp() {
     }
     setUserEmail(null);
     setUserName(null);
+    setUserLastName(null);
+    setUserCountry(null);
+    setUserCity(null);
+    setUserShowLastName(false);
     setUserGender(null);
     setUserPreferences([]);
     setUserAvatar(null);
@@ -1043,11 +1167,17 @@ export default function RezoApp() {
 
   const confirmName = async () => {
     const trimmed = nameDraft.trim();
-    if (!trimmed || !genderDraft || preferencesDraft.length === 0) return;
+    const trimmedLastName = lastNameDraft.trim();
+    const trimmedCity = cityDraft.trim();
+    if (!trimmed || !trimmedLastName || !countryDraft || !genderDraft || preferencesDraft.length === 0) return;
     const avatarRemoved = avatarDraft === '';
     const finalAvatar = avatarDraft ? avatarDraft : avatarRemoved ? null : userAvatar;
     try {
       await window.storage.set('rezo-username', trimmed, false);
+      await window.storage.set('rezo-lastname', trimmedLastName, false);
+      await window.storage.set('rezo-country', countryDraft, false);
+      await window.storage.set('rezo-city', trimmedCity, false);
+      await window.storage.set('rezo-show-lastname', showLastNameDraft ? 'true' : 'false', false);
       await window.storage.set('rezo-gender', genderDraft, false);
       await window.storage.set('rezo-preferences', JSON.stringify(preferencesDraft), false);
       if (finalAvatar) {
@@ -1069,6 +1199,10 @@ export default function RezoApp() {
         accounts[userEmail] = {
           ...(accounts[userEmail] || {}),
           name: trimmed,
+          lastName: trimmedLastName,
+          country: countryDraft,
+          city: trimmedCity,
+          showLastNamePublicly: showLastNameDraft,
           gender: genderDraft,
           preferences: preferencesDraft,
           avatar: finalAvatar || null,
@@ -1086,10 +1220,22 @@ export default function RezoApp() {
       else delete nextVerifiedMap[trimmed];
       await window.storage.set('verified-map', JSON.stringify(nextVerifiedMap), true);
       setVerifiedMap(nextVerifiedMap);
+      // Nom de famille : privé par défaut, n'entre dans le registre public que si l'utilisateur a
+      // explicitement coché "l'afficher publiquement" (voir Objectif de la demande).
+      const lastNamesRes = await window.storage.get('public-lastnames', true).catch(() => null);
+      const nextPublicLastNames = lastNamesRes && lastNamesRes.value ? JSON.parse(lastNamesRes.value) : {};
+      if (showLastNameDraft) nextPublicLastNames[trimmed] = trimmedLastName;
+      else delete nextPublicLastNames[trimmed];
+      await window.storage.set('public-lastnames', JSON.stringify(nextPublicLastNames), true);
+      setPublicLastNames(nextPublicLastNames);
     } catch (err) {
       // continue even if persistence fails
     }
     setUserName(trimmed);
+    setUserLastName(trimmedLastName);
+    setUserCountry(countryDraft);
+    setUserCity(trimmedCity);
+    setUserShowLastName(showLastNameDraft);
     setUserGender(genderDraft);
     setUserPreferences(preferencesDraft);
     setUserAvatar(finalAvatar);
@@ -1935,7 +2081,7 @@ export default function RezoApp() {
           <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime)}{past && ' · Terminée'}</div>
           <div className="card-meta-row"><Cake size={12} /> {formatAgeRange(m.ageMin, m.ageMax)}</div>
           <div className="card-meta-row">
-            Organisé par {m.host}{isHost ? ' (toi)' : ''}
+            Organisé par {m.host}{publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}{isHost ? ' (toi)' : ''}
             {hostVerified && (
               <span className="card-verified-badge" title="Numéro de téléphone vérifié">
                 <ShieldCheck size={12} /> Vérifié
@@ -2727,6 +2873,11 @@ export default function RezoApp() {
         .profile-modal-body { padding: 14px 22px 22px; overflow-y: auto; }
 
         .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+        .field-row { display: flex; gap: 10px; }
+        .field-row .field { flex: 1; min-width: 0; }
+        .field-hint {
+          display: block; font-size: 11px; color: var(--muted); margin: -6px 0 12px;
+        }
         .field label { font-size: 12px; color: var(--muted); }
         .field input, .field select, .field textarea {
           background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
@@ -3087,7 +3238,7 @@ export default function RezoApp() {
           disabled={locating}
         >
           {locating ? <Loader2 size={13} className="spin" /> : <Navigation size={13} />}
-          {userCoords ? '📍 Position activée' : locating ? 'Localisation…' : 'Activer ma position'}
+          {userCoords ? '📍 Position activée' : locating ? 'Localisation…' : '📍 Activités proches de moi'}
         </button>
       </div>
         {locationError && (
@@ -3562,14 +3713,68 @@ export default function RezoApp() {
                 </div>
               )}
 
-              <div className="field">
-                <FieldLabel icon={User}>Ton prénom ou pseudo</FieldLabel>
-                <input
-                  autoFocus
-                  value={nameDraft}
-                  onChange={(e) => setNameDraft(e.target.value)}
-                  placeholder="Ex: Yassine"
-                />
+              <div className="field-row">
+                <div className="field">
+                  <FieldLabel icon={User}>Prénom *</FieldLabel>
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    placeholder="Ex: Yassine"
+                  />
+                </div>
+                <div className="field">
+                  <FieldLabel icon={User}>Nom *</FieldLabel>
+                  <input
+                    value={lastNameDraft}
+                    onChange={(e) => setLastNameDraft(e.target.value)}
+                    placeholder="Ex: El Amrani"
+                  />
+                </div>
+              </div>
+              <span className="field-hint">
+                Seul ton prénom est visible sur les cartes, avatars et messages — ton nom reste
+                privé, sauf si tu choisis de l'afficher ci-dessous.
+              </span>
+
+              <div className="switch-row">
+                <div>
+                  <div className="switch-title">Afficher mon nom publiquement</div>
+                  <div className="switch-subtitle">Sinon, seul ton prénom apparaît aux autres membres</div>
+                </div>
+                <button
+                  className={`switch ${showLastNameDraft ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={showLastNameDraft}
+                  onClick={() => setShowLastNameDraft((v) => !v)}
+                >
+                  <span className="switch-knob"></span>
+                </button>
+              </div>
+
+              <div className="field-row">
+                <div className="field">
+                  <FieldLabel icon={Globe}>Pays *</FieldLabel>
+                  <select value={countryDraft} onChange={(e) => { setCountryDraft(e.target.value); setCityDraft(''); }}>
+                    {COUNTRIES.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <FieldLabel icon={MapPin}>Ville</FieldLabel>
+                  <input
+                    list="rezo-city-options"
+                    value={cityDraft}
+                    onChange={(e) => setCityDraft(e.target.value)}
+                    placeholder="Ex: Casablanca"
+                  />
+                  <datalist id="rezo-city-options">
+                    {(CITIES_BY_COUNTRY[countryDraft] || []).map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
+                </div>
               </div>
 
               <div className="field">
@@ -3658,7 +3863,13 @@ export default function RezoApp() {
               </div>
               <button
                 className="modal-submit"
-                disabled={!nameDraft.trim() || !genderDraft || preferencesDraft.length === 0}
+                disabled={
+                  !nameDraft.trim() ||
+                  !lastNameDraft.trim() ||
+                  !countryDraft ||
+                  !genderDraft ||
+                  preferencesDraft.length === 0
+                }
                 onClick={confirmName}
               >
                 <Check size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />

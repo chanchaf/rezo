@@ -126,9 +126,16 @@ l'utilisateur doit :
    (`window.storage`, `shared: true`) ; le mot de passe n'est jamais stocké en
    clair — il est haché côté client via `crypto.subtle.digest('SHA-256', …)`
    avant d'être enregistré (voir `hashPassword` dans `App.jsx`).
-2. **Remplir son profil** : prénom/pseudo, sexe, activités préférées, photo
+2. **Remplir son profil** : prénom, nom, sexe, pays (présélectionné via
+   géolocalisation IP, repli sur le Maroc), ville, activités préférées, photo
    optionnelle. Cette étape est obligatoire et s'enchaîne automatiquement
    après l'inscription ou la connexion.
+
+   Seul le **prénom** est affiché publiquement (cartes, avatars, chat) — le
+   nom de famille reste une donnée de profil privée, sauf si l'utilisateur
+   coche explicitement "Afficher mon nom publiquement". Dans ce cas, il est
+   ajouté au registre partagé `public-lastnames` (prénom → nom), consulté
+   uniquement pour compléter la ligne "Organisé par …" des cartes.
 
 Les comptes sont `shared: true`, donc stockés dans Firestore et bien
 synchronisés entre appareils (voir "À propos du stockage des données"
