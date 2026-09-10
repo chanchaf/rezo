@@ -135,7 +135,21 @@ l'utilisateur doit :
    nom de famille reste une donnée de profil privée, sauf si l'utilisateur
    coche explicitement "Afficher mon nom publiquement". Dans ce cas, il est
    ajouté au registre partagé `public-lastnames` (prénom → nom), consulté
-   uniquement pour compléter la ligne "Organisé par …" des cartes.
+   uniquement pour compléter la ligne "Organisé par …" des cartes. La ville
+   suit exactement la même logique via `public-cities` (bascule "Afficher ma
+   ville" dans Paramètres → Confidentialité).
+
+**Page de profil** : l'onglet "Profil" de la barre du bas ouvre une vraie page
+(pas une modale) — couverture, photo circulaire, badge "Vérifié" (numéro
+confirmé), note moyenne d'organisateur, ville/pays, trois statistiques
+cliquables (rencontres organisées/terminées, note moyenne — toutes calculées
+uniquement sur des rencontres **clôturées**, jamais sur une simple
+inscription), bio, tags d'activités colorés, badges/succès débloqués selon
+l'historique réel, et un aperçu de l'historique qui renvoie vers "Mes
+sorties". L'icône ⚙️ en haut à droite ouvre les Paramètres (modifier le
+profil, notifications, confidentialité, déconnexion) — modifier le profil
+reste le seul endroit où nom/prénom/photo/couverture/ville/sexe/activités/bio
+sont édités.
 
 Les comptes sont `shared: true`, donc stockés dans Firestore et bien
 synchronisés entre appareils (voir "À propos du stockage des données"

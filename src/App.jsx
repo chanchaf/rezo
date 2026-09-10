@@ -5,6 +5,7 @@ import {
   UserPlus, Copy, Share2, Star, ExternalLink, Home, Bookmark, Compass, User, Mail, Lock, LogOut, Eye, EyeOff,
   Trash2, Type as TypeIcon, AlignLeft, Heart, Activity, Mountain, Film, Plane, Camera, BookOpen, Cpu, Briefcase,
   Languages, PawPrint, Baby, Cake, Bell, BellOff, Flame, Award, ShieldCheck, Phone, Globe,
+  Trophy, Medal, Zap, Settings, ChevronRight, Image as ImageIcon,
 } from 'lucide-react';
 import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscribeFromPush, notifyByName } from './lib/push.js';
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
@@ -171,6 +172,20 @@ const CITIES_BY_COUNTRY = {
 
 // Devine le pays via géolocalisation IP (best effort, pas de clé requise) pour pré-sélectionner le
 // champ Pays à l'inscription ; le Maroc reste le repli par défaut si ça échoue ou prend trop de temps.
+// ipapi.co renvoie le nom du pays en anglais ; la liste COUNTRIES est en français (cohérente avec
+// le reste de l'UI) — on traduit les cas les plus probables, plutôt que d'accepter un nom qui ne
+// correspondrait à aucune <option> du menu déroulant.
+const ENGLISH_TO_FRENCH_COUNTRY = {
+  Morocco: 'Maroc',
+  France: 'France',
+  Spain: 'Espagne',
+  Belgium: 'Belgique',
+  Algeria: 'Algérie',
+  Tunisia: 'Tunisie',
+  Canada: 'Canada',
+  Switzerland: 'Suisse',
+};
+
 async function guessCountryFromIP() {
   try {
     const controller = new AbortController();
@@ -179,7 +194,8 @@ async function guessCountryFromIP() {
     clearTimeout(timeout);
     if (!res.ok) return 'Maroc';
     const name = (await res.text()).trim();
-    return COUNTRIES.includes(name) ? name : name || 'Maroc';
+    if (COUNTRIES.includes(name)) return name;
+    return ENGLISH_TO_FRENCH_COUNTRY[name] || 'Maroc';
   } catch (err) {
     return 'Maroc';
   }
@@ -364,6 +380,45 @@ function fileToAvatarDataUrl(file) {
   });
 }
 
+// Comme fileToAvatarDataUrl, mais recadre en bandeau large (façon couverture Facebook) plutôt
+// qu'en carré : ratio ~3:1, recadrage centré, redimensionné pour rester léger en localStorage.
+function fileToCoverDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('not an image'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('decode failed'));
+      img.onload = () => {
+        const width = 640;
+        const height = 220;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const targetRatio = width / height;
+        const srcRatio = img.width / img.height;
+        let sx = 0, sy = 0, sw = img.width, sh = img.height;
+        if (srcRatio > targetRatio) {
+          sw = img.height * targetRatio;
+          sx = (img.width - sw) / 2;
+        } else {
+          sh = img.width / targetRatio;
+          sy = (img.height - sh) / 2;
+        }
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // Avatar réutilisable : photo si disponible dans le registre partagé, sinon initiale colorée.
 function Avatar({ name, avatarUrl, size = 22 }) {
   const initial = (name || '?').trim().charAt(0).toUpperCase();
@@ -455,6 +510,12 @@ export default function RezoApp() {
   const [userCity, setUserCity] = useState(null);
   const [userShowLastName, setUserShowLastName] = useState(false);
   const [publicLastNames, setPublicLastNames] = useState({});
+  const [userShowCity, setUserShowCity] = useState(false);
+  const [publicCities, setPublicCities] = useState({});
+  const [userCover, setUserCover] = useState(null);
+  const [userBio, setUserBio] = useState('');
+  const [showProfilePage, setShowProfilePage] = useState(false);
+  const [showSettingsSheet, setShowSettingsSheet] = useState(false);
   const [userGender, setUserGender] = useState(null);
   const [userPreferences, setUserPreferences] = useState([]);
   const [userAvatar, setUserAvatar] = useState(null);
@@ -487,6 +548,9 @@ export default function RezoApp() {
   const [preferencesDraft, setPreferencesDraft] = useState([]);
   const [avatarDraft, setAvatarDraft] = useState(null);
   const [avatarProcessing, setAvatarProcessing] = useState(false);
+  const [coverDraft, setCoverDraft] = useState(null);
+  const [coverProcessing, setCoverProcessing] = useState(false);
+  const [bioDraft, setBioDraft] = useState('');
   const [pendingAction, setPendingAction] = useState(null); // fn to run after name is set
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -614,19 +678,32 @@ export default function RezoApp() {
     }
   }, []);
 
+  // Prénom -> ville, même logique que loadPublicLastNames (confidentialité opt-in, voir toggleShowCity).
+  const loadPublicCities = useCallback(async (silent) => {
+    try {
+      const res = await window.storage.get('public-cities', true);
+      const map = res && res.value ? JSON.parse(res.value) : {};
+      setPublicCities(map && typeof map === 'object' ? map : {});
+    } catch (err) {
+      if (!silent) setPublicCities({});
+    }
+  }, []);
+
   useEffect(() => {
     loadMeetups(false);
     loadProfiles(false);
     loadVerified(false);
     loadPublicLastNames(false);
+    loadPublicCities(false);
     const interval = setInterval(() => {
       if (!savingRef.current) loadMeetups(true);
       loadProfiles(true);
       loadVerified(true);
       loadPublicLastNames(true);
+      loadPublicCities(true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames]);
+  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames, loadPublicCities]);
 
   // Détecte les nouvelles arrivées à chaque rafraîchissement et notifie les membres concernés
   // (pas de partage de position continue : uniquement l'événement "est arrivé·e").
@@ -685,6 +762,24 @@ export default function RezoApp() {
         if (res && res.value === 'true') setUserShowLastName(true);
       } catch (err) {
         // opt-in par défaut désactivé
+      }
+      try {
+        const res = await window.storage.get('rezo-show-city', false);
+        if (res && res.value === 'true') setUserShowCity(true);
+      } catch (err) {
+        // opt-in par défaut désactivé
+      }
+      try {
+        const res = await window.storage.get('rezo-cover', false);
+        if (res && res.value) setUserCover(res.value);
+      } catch (err) {
+        // pas de couverture pour l'instant
+      }
+      try {
+        const res = await window.storage.get('rezo-bio', false);
+        if (res && res.value) setUserBio(res.value);
+      } catch (err) {
+        // pas de bio pour l'instant
       }
       try {
         const res = await window.storage.get('rezo-gender', false);
@@ -756,6 +851,53 @@ export default function RezoApp() {
         })
         .catch((err) => showToast(err.message || 'Impossible d’activer les notifications.'))
         .finally(() => setPushBusy(false));
+    }
+  };
+
+  // Bascules de confidentialité (page Paramètres) : effet immédiat, contrairement aux autres champs
+  // du profil qui n'appliquent qu'à la validation du formulaire "Modifier le profil".
+  const toggleShowLastName = async () => {
+    if (!userName) return;
+    const next = !userShowLastName;
+    setUserShowLastName(next);
+    setShowLastNameDraft(next);
+    try {
+      await window.storage.set('rezo-show-lastname', next ? 'true' : 'false', false);
+      if (userEmail) {
+        const accounts = await loadAccounts();
+        accounts[userEmail] = { ...(accounts[userEmail] || {}), showLastNamePublicly: next };
+        await saveAccounts(accounts);
+      }
+      const lastNamesRes = await window.storage.get('public-lastnames', true).catch(() => null);
+      const nextMap = lastNamesRes && lastNamesRes.value ? JSON.parse(lastNamesRes.value) : {};
+      if (next && userLastName) nextMap[userName] = userLastName;
+      else delete nextMap[userName];
+      await window.storage.set('public-lastnames', JSON.stringify(nextMap), true);
+      setPublicLastNames(nextMap);
+    } catch (err) {
+      showToast('Impossible de mettre à jour, réessaie.');
+    }
+  };
+
+  const toggleShowCity = async () => {
+    if (!userName) return;
+    const next = !userShowCity;
+    setUserShowCity(next);
+    try {
+      await window.storage.set('rezo-show-city', next ? 'true' : 'false', false);
+      if (userEmail) {
+        const accounts = await loadAccounts();
+        accounts[userEmail] = { ...(accounts[userEmail] || {}), showCityPublicly: next };
+        await saveAccounts(accounts);
+      }
+      const citiesRes = await window.storage.get('public-cities', true).catch(() => null);
+      const nextMap = citiesRes && citiesRes.value ? JSON.parse(citiesRes.value) : {};
+      if (next && userCity) nextMap[userName] = userCity;
+      else delete nextMap[userName];
+      await window.storage.set('public-cities', JSON.stringify(nextMap), true);
+      setPublicCities(nextMap);
+    } catch (err) {
+      showToast('Impossible de mettre à jour, réessaie.');
     }
   };
 
@@ -990,10 +1132,22 @@ export default function RezoApp() {
       setGenderDraft(userGender);
       setPreferencesDraft(userPreferences);
       setAvatarDraft(null);
+      setCoverDraft(null);
+      setBioDraft(userBio || '');
       setPhoneDraft(userPhone || '');
       setPhoneVerifiedDraft(userPhoneVerified);
       resetPhoneVerifyUi();
       setShowNameModal(true);
+    } else {
+      requireName(() => {});
+    }
+  };
+
+  // Ouvre la vraie page de profil (voir plus bas dans le rendu) plutôt que le formulaire d'édition
+  // — accessible depuis l'onglet "Profil" de la barre du bas une fois le profil complet.
+  const openProfilePage = () => {
+    if (userEmail && userName && userLastName && userGender && userPreferences.length > 0) {
+      setShowProfilePage(true);
     } else {
       requireName(() => {});
     }
@@ -1025,6 +1179,8 @@ export default function RezoApp() {
     setGenderDraft(userGender || '');
     setPreferencesDraft(userPreferences.length > 0 ? userPreferences : []);
     setAvatarDraft(null);
+    setCoverDraft(null);
+    setBioDraft(userBio || '');
     setPhoneDraft(userPhone || '');
     setPhoneVerifiedDraft(userPhoneVerified);
     resetPhoneVerifyUi();
@@ -1068,6 +1224,8 @@ export default function RezoApp() {
       setGenderDraft('');
       setPreferencesDraft([]);
       setAvatarDraft(null);
+      setCoverDraft(null);
+      setBioDraft('');
       setPhoneDraft('');
       setPhoneVerifiedDraft(false);
       resetPhoneVerifyUi();
@@ -1109,6 +1267,9 @@ export default function RezoApp() {
       const country = account.country || 'Maroc';
       const city = account.city || '';
       const showLastName = !!account.showLastNamePublicly;
+      const showCity = !!account.showCityPublicly;
+      const cover = account.cover || null;
+      const bio = account.bio || '';
       const gender = account.gender || '';
       const preferences = account.preferences || [];
       const avatar = account.avatar || null;
@@ -1120,6 +1281,9 @@ export default function RezoApp() {
       await window.storage.set('rezo-country', country, false);
       if (city) await window.storage.set('rezo-city', city, false);
       await window.storage.set('rezo-show-lastname', showLastName ? 'true' : 'false', false);
+      await window.storage.set('rezo-show-city', showCity ? 'true' : 'false', false);
+      if (cover) await window.storage.set('rezo-cover', cover, false);
+      if (bio) await window.storage.set('rezo-bio', bio, false);
       if (gender) await window.storage.set('rezo-gender', gender, false);
       if (preferences.length) await window.storage.set('rezo-preferences', JSON.stringify(preferences), false);
       if (avatar) await window.storage.set('rezo-avatar', avatar, false);
@@ -1131,6 +1295,9 @@ export default function RezoApp() {
       setUserCountry(country);
       setUserCity(city || null);
       setUserShowLastName(showLastName);
+      setUserShowCity(showCity);
+      setUserCover(cover);
+      setUserBio(bio);
       setUserGender(gender || null);
       setUserPreferences(preferences);
       setUserAvatar(avatar);
@@ -1145,6 +1312,8 @@ export default function RezoApp() {
       setGenderDraft(gender);
       setPreferencesDraft(preferences);
       setAvatarDraft(null);
+      setCoverDraft(null);
+      setBioDraft(bio);
       setPhoneDraft(phone || '');
       setPhoneVerifiedDraft(phoneVerified);
       resetPhoneVerifyUi();
@@ -1168,12 +1337,17 @@ export default function RezoApp() {
     setUserCountry(null);
     setUserCity(null);
     setUserShowLastName(false);
+    setUserShowCity(false);
+    setUserCover(null);
+    setUserBio('');
     setUserGender(null);
     setUserPreferences([]);
     setUserAvatar(null);
     setUserPhone(null);
     setUserPhoneVerified(false);
     setShowNameModal(false);
+    setShowProfilePage(false);
+    setShowSettingsSheet(false);
     setPendingAction(null);
     showToast('Déconnecté·e.');
   };
@@ -1195,6 +1369,19 @@ export default function RezoApp() {
     }
   };
 
+  const handleCoverFile = async (file) => {
+    if (!file) return;
+    setCoverProcessing(true);
+    try {
+      const dataUrl = await fileToCoverDataUrl(file);
+      setCoverDraft(dataUrl);
+    } catch (err) {
+      showToast("Impossible d'utiliser cette image.");
+    } finally {
+      setCoverProcessing(false);
+    }
+  };
+
   const confirmName = async () => {
     const trimmed = nameDraft.trim();
     const trimmedLastName = lastNameDraft.trim();
@@ -1202,6 +1389,9 @@ export default function RezoApp() {
     if (!trimmed || !trimmedLastName || !countryDraft || !genderDraft || preferencesDraft.length === 0) return;
     const avatarRemoved = avatarDraft === '';
     const finalAvatar = avatarDraft ? avatarDraft : avatarRemoved ? null : userAvatar;
+    const coverRemoved = coverDraft === '';
+    const finalCover = coverDraft ? coverDraft : coverRemoved ? null : userCover;
+    const trimmedBio = bioDraft.trim().slice(0, 280);
     try {
       await window.storage.set('rezo-username', trimmed, false);
       await window.storage.set('rezo-lastname', trimmedLastName, false);
@@ -1210,6 +1400,9 @@ export default function RezoApp() {
       await window.storage.set('rezo-show-lastname', showLastNameDraft ? 'true' : 'false', false);
       await window.storage.set('rezo-gender', genderDraft, false);
       await window.storage.set('rezo-preferences', JSON.stringify(preferencesDraft), false);
+      if (finalCover) await window.storage.set('rezo-cover', finalCover, false);
+      else await window.storage.delete('rezo-cover', false).catch(() => {});
+      await window.storage.set('rezo-bio', trimmedBio, false);
       if (finalAvatar) {
         await window.storage.set('rezo-avatar', finalAvatar, false);
         const nextProfiles = { ...profilesMap, [trimmed]: finalAvatar };
@@ -1233,6 +1426,9 @@ export default function RezoApp() {
           country: countryDraft,
           city: trimmedCity,
           showLastNamePublicly: showLastNameDraft,
+          showCityPublicly: userShowCity,
+          cover: finalCover || null,
+          bio: trimmedBio,
           gender: genderDraft,
           preferences: preferencesDraft,
           avatar: finalAvatar || null,
@@ -1258,6 +1454,14 @@ export default function RezoApp() {
       else delete nextPublicLastNames[trimmed];
       await window.storage.set('public-lastnames', JSON.stringify(nextPublicLastNames), true);
       setPublicLastNames(nextPublicLastNames);
+      // Même logique pour la ville : le choix de la rendre publique se fait dans Paramètres >
+      // Confidentialité (userShowCity), mais on garde le registre à jour si la ville change ici.
+      const citiesRes = await window.storage.get('public-cities', true).catch(() => null);
+      const nextPublicCities = citiesRes && citiesRes.value ? JSON.parse(citiesRes.value) : {};
+      if (userShowCity && trimmedCity) nextPublicCities[trimmed] = trimmedCity;
+      else delete nextPublicCities[trimmed];
+      await window.storage.set('public-cities', JSON.stringify(nextPublicCities), true);
+      setPublicCities(nextPublicCities);
     } catch (err) {
       // continue even if persistence fails
     }
@@ -1266,12 +1470,15 @@ export default function RezoApp() {
     setUserCountry(countryDraft);
     setUserCity(trimmedCity);
     setUserShowLastName(showLastNameDraft);
+    setUserCover(finalCover);
+    setUserBio(trimmedBio);
     setUserGender(genderDraft);
     setUserPreferences(preferencesDraft);
     setUserAvatar(finalAvatar);
     setUserPhone(phoneDraft.trim() || null);
     setUserPhoneVerified(phoneVerifiedDraft);
     setAvatarDraft(null);
+    setCoverDraft(null);
     setShowNameModal(false);
     if (pendingAction) {
       pendingAction(trimmed, genderDraft);
@@ -1590,6 +1797,40 @@ export default function RezoApp() {
     if (scores.length === 0) return null;
     return { avg: scores.reduce((a, b) => a + b, 0) / scores.length, count: scores.length };
   };
+
+  // Statistiques de la page de profil : uniquement des rencontres réellement clôturées (même
+  // philosophie que monthlyCount/canRate — un chiffre qui reflète une vraie participation vécue).
+  const organizedCount = userName ? meetups.filter((m) => m.closed && m.host === userName).length : 0;
+  const participatedCount = userName
+    ? meetups.filter((m) => m.closed && m.host !== userName && m.participants.includes(userName)).length
+    : 0;
+  const myRatingStats = userName ? hostRatingStats(userName) : null;
+  // Nombre de fois où l'utilisateur a été le·la premier·ère arrivé·e sur place (voir markArrival).
+  const firstArrivalCount = userName
+    ? meetups.filter((m) => {
+        if (!m.arrivals || !m.arrivals[userName]) return false;
+        const times = Object.values(m.arrivals).map((t) => new Date(t).getTime());
+        return new Date(m.arrivals[userName]).getTime() === Math.min(...times);
+      }).length
+    : 0;
+  // Historique : dernières rencontres clôturées (organisées ou rejointes), plus récentes d'abord —
+  // aperçu affiché sur la page de profil, avec renvoi vers "Mes sorties" pour la liste complète.
+  const profileHistory = userName
+    ? meetups
+        .filter((m) => m.closed && (m.host === userName || m.participants.includes(userName)))
+        .sort((a, b) => new Date(b.datetime) - new Date(a.datetime))
+        .slice(0, 3)
+    : [];
+  // Badges "façon succès" : chaque palier est un badge distinct, débloqué indépendamment une fois
+  // le seuil atteint — collection visuelle plutôt qu'un simple compteur (voir Objectif de la demande).
+  const PROFILE_BADGES = [
+    { id: 'org-1', icon: Sparkles, label: 'Premier pas', hint: '1 rencontre organisée', threshold: 1, counter: organizedCount },
+    { id: 'org-5', icon: Award, label: 'Organisateur·rice confirmé·e', hint: '5 rencontres organisées', threshold: 5, counter: organizedCount },
+    { id: 'org-10', icon: Trophy, label: 'Pilier de la communauté', hint: '10 rencontres organisées', threshold: 10, counter: organizedCount },
+    { id: 'part-3', icon: Flame, label: 'Habitué·e', hint: '3 rencontres rejointes', threshold: 3, counter: participatedCount },
+    { id: 'part-10', icon: Medal, label: 'Grand·e explorateur·rice', hint: '10 rencontres rejointes', threshold: 10, counter: participatedCount },
+    { id: 'arrival-3', icon: Zap, label: 'Toujours à l’heure', hint: 'Premier·ère arrivé·e 3 fois', threshold: 3, counter: firstArrivalCount },
+  ].map((b) => ({ ...b, unlocked: b.counter >= b.threshold }));
 
   const submitRating = (meetup) => {
     if (!ratingHostStars || !ratingSatisfactionStars) {
@@ -2120,7 +2361,8 @@ export default function RezoApp() {
           <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime)}{past && ' · Terminée'}</div>
           <div className="card-meta-row"><Cake size={12} /> {formatAgeRange(m.ageMin, m.ageMax)}</div>
           <div className="card-meta-row">
-            Organisé par {m.host}{publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}{isHost ? ' (toi)' : ''}
+            Organisé par {m.host}{publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}
+            {publicCities[m.host] ? ` · ${publicCities[m.host]}` : ''}{isHost ? ' (toi)' : ''}
             {hostVerified && (
               <span className="card-verified-badge" title="Numéro de téléphone vérifié">
                 <ShieldCheck size={12} /> Vérifié
@@ -2893,6 +3135,22 @@ export default function RezoApp() {
         .profile-cover {
           height: 84px; border-radius: 18px 18px 0 0;
           background: var(--cta-grad);
+          background-size: cover; background-position: center;
+        }
+        .profile-cover-editable { position: relative; }
+        .cover-edit-btn {
+          position: absolute; bottom: 8px; right: 10px;
+          width: 28px; height: 28px; border-radius: 50%;
+          background: rgba(0,0,0,0.45); color: #fff;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer;
+        }
+        .cover-edit-btn:hover { background: rgba(0,0,0,0.6); }
+        .cover-remove-btn {
+          position: absolute; top: 8px; right: 10px;
+          width: 22px; height: 22px; border-radius: 50%;
+          background: rgba(0,0,0,0.45); color: #fff; border: none;
+          display: flex; align-items: center; justify-content: center; cursor: pointer;
         }
         .profile-avatar-wrap {
           position: relative; width: fit-content; margin: -44px auto 0;
@@ -2916,6 +3174,114 @@ export default function RezoApp() {
           display: block; margin: 8px auto 0; text-align: center;
         }
         .profile-modal-body { padding: 14px 22px 22px; overflow-y: auto; }
+
+        /* Vraie page de profil (pas une modale) : occupe tout l'espace au-dessus de la nav du bas,
+           façon écran d'identité sociale plutôt que formulaire. */
+        .profile-page {
+          position: absolute; top: 0; left: 0; right: 0; bottom: var(--nav-h);
+          background: var(--ink); z-index: 12; display: flex; flex-direction: column;
+        }
+        .profile-page-scroll { flex: 1; overflow-y: auto; position: relative; }
+        .profile-page-cover {
+          height: 140px; background: var(--cta-grad); background-size: cover; background-position: center;
+        }
+        .profile-page-nav-btn {
+          position: absolute; top: 14px; width: 34px; height: 34px; border-radius: 50%;
+          background: rgba(0,0,0,0.4); color: #fff; border: none;
+          display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2;
+        }
+        .profile-page-back { left: 14px; }
+        .profile-page-settings { right: 14px; }
+        .profile-page-avatar-wrap {
+          position: relative; width: fit-content; margin: -56px auto 0; display: flex; justify-content: center;
+        }
+        .profile-page-avatar-wrap .avatar,
+        .profile-page-avatar-wrap img {
+          border: 5px solid var(--ink) !important;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+        }
+        .profile-page-body { padding: 10px 22px 32px; text-align: center; }
+        .profile-page-name {
+          font-family: 'Space Grotesk', sans-serif; font-size: 19px; font-weight: 700;
+          display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;
+        }
+        .profile-page-subtitle {
+          margin-top: 4px; font-size: 12.5px; color: var(--muted);
+          display: flex; align-items: center; justify-content: center; gap: 4px;
+        }
+        .profile-stats-row {
+          display: flex; margin: 18px 0 4px; border-top: 1px solid var(--border);
+          border-bottom: 1px solid var(--border);
+        }
+        .profile-stat {
+          flex: 1; background: none; border: none; border-right: 1px solid var(--border);
+          padding: 12px 4px; cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .profile-stat:last-child { border-right: none; }
+        .profile-stat:hover { background: var(--card-hover); }
+        .profile-stat-value {
+          font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 700; color: var(--text);
+        }
+        .profile-stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+        .profile-bio {
+          margin-top: 16px; font-size: 13.5px; color: var(--text); line-height: 1.5; text-align: left;
+        }
+        .profile-section { margin-top: 22px; text-align: left; }
+        .profile-section-title {
+          font-family: 'Space Grotesk', sans-serif; font-size: 13.5px; font-weight: 700;
+        }
+        .profile-section-title-row { display: flex; align-items: center; justify-content: space-between; }
+        .profile-section-link {
+          background: none; border: none; color: var(--live); font-size: 12px; font-weight: 600;
+          cursor: pointer; display: flex; align-items: center; gap: 2px; font-family: 'Inter', sans-serif;
+        }
+        .profile-activity-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .profile-activity-tag {
+          font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px;
+          font-family: 'Inter', sans-serif;
+        }
+        .profile-badges-grid {
+          display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px;
+        }
+        .profile-badge {
+          display: flex; flex-direction: column; align-items: center; gap: 4px;
+          padding: 12px 6px; border-radius: 12px; background: var(--card); border: 1px solid var(--border);
+          opacity: 0.45; text-align: center;
+        }
+        .profile-badge.unlocked { opacity: 1; border-color: var(--amber); background: rgba(242,166,90,0.1); }
+        .profile-badge-icon {
+          width: 38px; height: 38px; border-radius: 50%; background: var(--ink);
+          display: flex; align-items: center; justify-content: center; color: var(--muted);
+        }
+        .profile-badge.unlocked .profile-badge-icon { background: var(--amber); color: #fff; }
+        .profile-badge-label { font-size: 10.5px; font-weight: 600; color: var(--text); line-height: 1.25; }
+        .profile-badge-progress { font-size: 9.5px; color: var(--muted); }
+        .profile-history-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+        .profile-history-row {
+          display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px;
+          background: var(--card); border: 1px solid var(--border);
+        }
+        .profile-history-row .swatch { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+        .profile-history-mid { min-width: 0; }
+        .profile-history-title {
+          font-size: 12.5px; font-weight: 600; color: var(--text);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .profile-history-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+        .settings-row {
+          width: 100%; display: flex; align-items: center; gap: 10px; text-align: left;
+          background: var(--ink); border: 1px solid var(--border); border-radius: 10px;
+          padding: 12px 14px; font-size: 13.5px; font-weight: 600; color: var(--text);
+          cursor: pointer; margin-bottom: 16px; font-family: 'Inter', sans-serif;
+        }
+        .settings-row:hover { border-color: var(--border-strong); }
+        .settings-row-chevron { margin-left: auto; color: var(--muted); }
+        .settings-section-label {
+          font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+          color: var(--muted); margin: 18px 0 8px;
+        }
+        .settings-logout-btn { margin-top: 20px; color: var(--danger); border-color: var(--danger); }
 
         .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
         .field-row { display: flex; gap: 10px; }
@@ -3571,8 +3937,8 @@ export default function RezoApp() {
           {activeFilterCount > 0 && <span className="bottom-nav-badge">{activeFilterCount}</span>}
         </button>
         <button
-          className={`bottom-nav-item ${showNameModal || showAuthModal ? 'active' : ''}`}
-          onClick={openProfile}
+          className={`bottom-nav-item ${showProfilePage || showNameModal || showAuthModal ? 'active' : ''}`}
+          onClick={openProfilePage}
         >
           {userName ? <Avatar name={userName} avatarUrl={userAvatar} size={22} /> : <User size={20} />}
           <span>Profil</span>
@@ -3713,7 +4079,25 @@ export default function RezoApp() {
               <X size={16} />
             </button>
 
-            <div className="profile-cover"></div>
+            <div
+              className="profile-cover profile-cover-editable"
+              style={coverDraft || userCover ? { backgroundImage: `url(${coverDraft !== null ? coverDraft : userCover})` } : undefined}
+            >
+              <label className="cover-edit-btn" title="Changer la photo de couverture">
+                {coverProcessing ? <Loader2 size={13} className="spin" /> : <ImageIcon size={13} />}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleCoverFile(e.target.files && e.target.files[0])}
+                />
+              </label>
+              {(coverDraft || userCover) && (
+                <button type="button" className="cover-remove-btn" title="Retirer la couverture" onClick={() => setCoverDraft('')}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
             <div className="profile-avatar-wrap">
               <Avatar
                 name={nameDraft || userName || '?'}
@@ -3739,43 +4123,6 @@ export default function RezoApp() {
             <div className="profile-modal-body">
               {userEmail && <div className="auth-connected-as" style={{ margin: '0 auto 14px' }}>Connecté avec {userEmail}</div>}
 
-              {userName && monthlyCount > 0 && (
-                <div className={`streak-card ${badgeUnlocked ? 'unlocked' : ''}`}>
-                  {badgeUnlocked ? <Award size={18} /> : <Flame size={18} />}
-                  <div>
-                    <div className="streak-card-title">
-                      {monthlyCount} rencontre{monthlyCount > 1 ? 's' : ''} ce mois-ci
-                    </div>
-                    <div className="streak-card-subtitle">
-                      {badgeUnlocked
-                        ? 'Badge débloqué, continue comme ça !'
-                        : `Encore ${BADGE_THRESHOLD - monthlyCount} pour débloquer le badge`}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {isPushSupported() && userEmail && (
-                <div className="switch-row push-toggle-row">
-                  <div>
-                    <div className="switch-title">
-                      {pushEnabled ? <Bell size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} /> : <BellOff size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />}
-                      Notifications push
-                    </div>
-                    <div className="switch-subtitle">Demandes, acceptations, arrivées — en temps réel</div>
-                  </div>
-                  <button
-                    className={`switch ${pushEnabled ? 'on' : ''}`}
-                    role="switch"
-                    aria-checked={pushEnabled}
-                    disabled={pushBusy}
-                    onClick={togglePush}
-                  >
-                    <span className="switch-knob"></span>
-                  </button>
-                </div>
-              )}
-
               <div className="field-row">
                 <div className="field">
                   <FieldLabel icon={User}>Prénom *</FieldLabel>
@@ -3797,23 +4144,8 @@ export default function RezoApp() {
               </div>
               <span className="field-hint">
                 Seul ton prénom est visible sur les cartes, avatars et messages — ton nom reste
-                privé, sauf si tu choisis de l'afficher ci-dessous.
+                privé, sauf si tu l'affiches publiquement depuis Paramètres → Confidentialité.
               </span>
-
-              <div className="switch-row">
-                <div>
-                  <div className="switch-title">Afficher mon nom publiquement</div>
-                  <div className="switch-subtitle">Sinon, seul ton prénom apparaît aux autres membres</div>
-                </div>
-                <button
-                  className={`switch ${showLastNameDraft ? 'on' : ''}`}
-                  role="switch"
-                  aria-checked={showLastNameDraft}
-                  onClick={() => setShowLastNameDraft((v) => !v)}
-                >
-                  <span className="switch-knob"></span>
-                </button>
-              </div>
 
               <div className="field-row">
                 <div className="field">
@@ -3924,6 +4256,18 @@ export default function RezoApp() {
                   ))}
                 </div>
               </div>
+
+              <div className="field">
+                <FieldLabel icon={AlignLeft}>Bio (optionnel)</FieldLabel>
+                <textarea
+                  value={bioDraft}
+                  maxLength={280}
+                  onChange={(e) => setBioDraft(e.target.value)}
+                  placeholder="Parle un peu de toi…"
+                />
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{bioDraft.length}/280</span>
+              </div>
+
               <button
                 className="modal-submit"
                 disabled={
@@ -3938,13 +4282,225 @@ export default function RezoApp() {
                 <Check size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
                 Continuer
               </button>
-              {userEmail && (
-                <button type="button" className="auth-switch-btn auth-logout-btn" onClick={logout}>
-                  <LogOut size={12} style={{ verticalAlign: '-2px', marginRight: 5 }} />
-                  Se déconnecter
-                </button>
-              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {showProfilePage && userName && (
+        <div className="profile-page">
+          <div className="profile-page-scroll">
+            <div
+              className="profile-page-cover"
+              style={userCover ? { backgroundImage: `url(${userCover})` } : undefined}
+            ></div>
+            <button className="profile-page-nav-btn profile-page-back" onClick={() => setShowProfilePage(false)} title="Retour">
+              <ChevronRight size={18} style={{ transform: 'rotate(180deg)' }} />
+            </button>
+            <button className="profile-page-nav-btn profile-page-settings" onClick={() => setShowSettingsSheet(true)} title="Paramètres">
+              <Settings size={18} />
+            </button>
+
+            <div className="profile-page-avatar-wrap">
+              <Avatar name={userName} avatarUrl={userAvatar} size={104} />
+            </div>
+
+            <div className="profile-page-body">
+              <div className="profile-page-name">
+                {userName} {userLastName}
+                {userPhoneVerified && (
+                  <span className="card-verified-badge" title="Compte vérifié">
+                    <ShieldCheck size={13} /> Vérifié
+                  </span>
+                )}
+              </div>
+              {myRatingStats && (
+                <div style={{ marginTop: 2 }}>
+                  <StarDisplay value={myRatingStats.avg} count={myRatingStats.count} size={14} />
+                </div>
+              )}
+              {(userCity || userCountry) && (
+                <div className="profile-page-subtitle">
+                  <MapPin size={12} /> {[userCity, userCountry].filter(Boolean).join(', ')}
+                </div>
+              )}
+
+              <div className="profile-stats-row">
+                <button
+                  className="profile-stat"
+                  onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                >
+                  <div className="profile-stat-value">{organizedCount}</div>
+                  <div className="profile-stat-label">Organisées</div>
+                </button>
+                <button
+                  className="profile-stat"
+                  onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                >
+                  <div className="profile-stat-value">{participatedCount}</div>
+                  <div className="profile-stat-label">Terminées</div>
+                </button>
+                <button
+                  className="profile-stat"
+                  onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                >
+                  <div className="profile-stat-value">{myRatingStats ? myRatingStats.avg.toFixed(1) : '—'}</div>
+                  <div className="profile-stat-label">{myRatingStats ? 'Note moyenne' : 'Avis reçus'}</div>
+                </button>
+              </div>
+
+              {userBio && <div className="profile-bio">{userBio}</div>}
+
+              {userPreferences.length > 0 && (
+                <div className="profile-section">
+                  <div className="profile-section-title">Activités préférées</div>
+                  <div className="profile-activity-tags">
+                    {userPreferences.map((id) => {
+                      const a = activityById(id);
+                      return (
+                        <span
+                          key={id}
+                          className="profile-activity-tag"
+                          style={{ background: `${a.color}22`, color: a.color, border: `1px solid ${a.color}55` }}
+                        >
+                          {a.label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="profile-section">
+                <div className="profile-section-title">Badges</div>
+                <div className="profile-badges-grid">
+                  {PROFILE_BADGES.map((b) => {
+                    const BadgeIcon = b.icon;
+                    return (
+                      <div key={b.id} className={`profile-badge ${b.unlocked ? 'unlocked' : ''}`} title={b.hint}>
+                        <div className="profile-badge-icon"><BadgeIcon size={20} /></div>
+                        <div className="profile-badge-label">{b.label}</div>
+                        {!b.unlocked && <div className="profile-badge-progress">{b.counter}/{b.threshold}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="profile-section">
+                <div className="profile-section-title-row">
+                  <div className="profile-section-title">Historique</div>
+                  {profileHistory.length > 0 && (
+                    <button
+                      className="profile-section-link"
+                      onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                    >
+                      Voir tout <ChevronRight size={13} />
+                    </button>
+                  )}
+                </div>
+                {profileHistory.length === 0 ? (
+                  <div className="near-city-empty">Aucune rencontre terminée pour l'instant.</div>
+                ) : (
+                  <div className="profile-history-list">
+                    {profileHistory.map((m) => (
+                      <div key={m.id} className="profile-history-row">
+                        <span className="swatch" style={{ background: activityById(m.activity).color }}></span>
+                        <div className="profile-history-mid">
+                          <div className="profile-history-title">{m.title}</div>
+                          <div className="profile-history-meta">
+                            {formatWhen(m.datetime)} · {m.host === userName ? 'Organisée' : 'Participé·e'}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettingsSheet && (
+        <div className="modal-overlay" onClick={() => setShowSettingsSheet(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">
+                <Settings size={15} style={{ verticalAlign: '-2px', marginRight: 7 }} />
+                Paramètres
+              </div>
+              <button className="modal-close" onClick={() => setShowSettingsSheet(false)}><X size={18} /></button>
+            </div>
+
+            <button
+              type="button"
+              className="settings-row"
+              onClick={() => { setShowSettingsSheet(false); openProfile(); }}
+            >
+              <Pencil size={15} /> Modifier le profil
+              <ChevronRight size={14} className="settings-row-chevron" />
+            </button>
+
+            {isPushSupported() && userEmail && (
+              <div className="switch-row">
+                <div>
+                  <div className="switch-title">
+                    {pushEnabled ? <Bell size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} /> : <BellOff size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />}
+                    Notifications push
+                  </div>
+                  <div className="switch-subtitle">Demandes, acceptations, arrivées — en temps réel</div>
+                </div>
+                <button
+                  className={`switch ${pushEnabled ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={pushEnabled}
+                  disabled={pushBusy}
+                  onClick={togglePush}
+                >
+                  <span className="switch-knob"></span>
+                </button>
+              </div>
+            )}
+
+            <div className="settings-section-label">Confidentialité</div>
+            <div className="switch-row">
+              <div>
+                <div className="switch-title">Afficher mon nom complet</div>
+                <div className="switch-subtitle">Sinon, seul ton prénom apparaît aux autres membres</div>
+              </div>
+              <button
+                className={`switch ${userShowLastName ? 'on' : ''}`}
+                role="switch"
+                aria-checked={userShowLastName}
+                onClick={toggleShowLastName}
+              >
+                <span className="switch-knob"></span>
+              </button>
+            </div>
+            <div className="switch-row">
+              <div>
+                <div className="switch-title">Afficher ma ville</div>
+                <div className="switch-subtitle">Sinon, ta ville reste privée</div>
+              </div>
+              <button
+                className={`switch ${userShowCity ? 'on' : ''}`}
+                role="switch"
+                aria-checked={userShowCity}
+                onClick={toggleShowCity}
+              >
+                <span className="switch-knob"></span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              className="modal-cancel settings-logout-btn"
+              onClick={() => { setShowSettingsSheet(false); logout(); }}
+            >
+              <LogOut size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+              Se déconnecter
+            </button>
           </div>
         </div>
       )}
