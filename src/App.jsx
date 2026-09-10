@@ -1819,6 +1819,17 @@ export default function RezoApp() {
     });
   }
 
+  // "Organisé par quelqu'un que tu as déjà rencontré" : un vrai lien vécu, pas une co-inscription.
+  // Ne compte que les organisateurs d'une rencontre CLÔTURÉE où l'utilisateur figurait comme
+  // participant accepté (jamais une rencontre à venir/en cours, ni une simple demande en attente).
+  const metHosts = new Set();
+  if (userName) {
+    meetups.forEach((m) => {
+      if (!m.closed || m.host === userName) return;
+      if (m.participants.includes(userName)) metHosts.add(m.host);
+    });
+  }
+
   // Rendu d'une carte de rencontre, partagé entre la liste normale (groupée par activité)
   // et la liste de repli "à proximité" (quand le flux local est vide).
   const renderMeetupCard = (m) => {
@@ -1842,7 +1853,7 @@ export default function RezoApp() {
     const hostVerified = !!verifiedMap[m.host];
     // Inutile de signaler "déjà rencontré"/"amis en commun" pour une rencontre qu'on a déjà
     // rejointe (forcément vrai puisqu'on y est) — seulement utile pour décider de rejoindre.
-    const alreadyMetHost = !isHost && !isIn && knownPeople.has(m.host);
+    const alreadyMetHost = !isHost && !isIn && metHosts.has(m.host);
     const mutualCount = !isHost && !isIn && !alreadyMetHost
       ? m.participants.filter((p) => p !== userName && knownPeople.has(p)).length
       : 0;
