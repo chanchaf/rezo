@@ -309,6 +309,55 @@ mesures pour ne jamais montrer un mur sans solution :
    côté client à partir de l'historique des rencontres déjà stocké, aucune
    donnée supplémentaire nécessaire.
 
+## Couche sociale : fidélité et liens réels
+
+Trois fonctionnalités qui récompensent la fidélité et les liens déjà vécus
+plutôt qu'un système d'amis déclaratif classique — cohérent avec l'esprit
+"rencontres réelles" du concept RÉZO.
+
+1. **Suivre un organisateur** : bouton "Suivre" sur le profil public d'un
+   organisateur (accessible en tapant son nom depuis n'importe quelle carte,
+   voir `.card-host-link`), à côté de sa note. Le nombre d'abonnés est
+   affiché ("X abonnés") mais **jamais la liste des abonnés** — volontaire,
+   pour éviter une dérive de popularité et garder le focus sur la qualité des
+   rencontres plutôt que sur le nombre d'abonnés. Quand un organisateur suivi
+   publie une nouvelle rencontre, chaque abonné reçoit une notification push
+   (voir `notifyByName` dans `handleCreate`) et la rencontre remonte dans la
+   section "De tes abonnements" de l'accueil, distincte de "Recommandé pour
+   toi" (basée sur les activités préférées). Stocké dans le registre partagé
+   `follows` (nom de l'abonné → liste des noms suivis).
+
+2. **Rencontres récurrentes** : à la création, option "Répéter"
+   (hebdomadaire / toutes les 2 semaines / mensuelle), avec fin "jusqu'à
+   nouvel ordre" ou à une date précise. Chaque occurrence est un document de
+   rencontre indépendant partageant un `seriesId` commun (voir
+   `generateSeriesOccurrences`) — génération **plafonnée à 12 occurrences**
+   par série au moment de la création (`SERIES_OCCURRENCE_CAP`) : il n'y a
+   pas de tâche planifiée côté serveur pour prolonger une série au-delà de ce
+   plafond, c'est une limite connue du prototype. Le flux n'affiche que la
+   prochaine occurrence à venir de chaque série (les occurrences passées
+   restent visibles dans l'historique). Un participant qui rejoint choisit
+   "juste cette fois" ou "toutes les prochaines occurrences" ; dans ce
+   second cas, l'acceptation de l'organisateur sur la demande initiale
+   l'inscrit automatiquement à toutes les occurrences futures de la série
+   (voir la cascade dans `respondToRequest`), sans revalidation à chaque
+   fois — il peut toujours se désister d'une occurrence précise sans quitter
+   la série. L'organisateur peut modifier une occurrence isolément (édition
+   normale, ne touche pas les autres) ou arrêter toute la série (supprime les
+   occurrences futures non closes, garde l'historique passé intact).
+
+3. **Cercle proche** : construit **automatiquement**, sans ajout manuel —
+   toute personne avec qui l'utilisateur a terminé au moins une rencontre
+   ensemble (côté hôte ou participant) entre dans son cercle (voir
+   `closeCircle`, calculé côté client à partir de l'historique des rencontres
+   clôturées). Effet dans le flux : priorité de tri légère (jamais un filtre)
+   pour les rencontres où un membre du cercle est déjà inscrit, avec la
+   mention "Avec {nom}, que tu as déjà rencontré·e". Page dédiée "Mon
+   cercle" (accessible depuis le profil) listant chaque personne rencontrée
+   avec le nombre de rencontres partagées, la date de la dernière fois, et un
+   raccourci vers son profil public (et donc ses prochaines rencontres/le
+   suivi si besoin).
+
 ## Fonctionnalités actuelles
 
 - Création de compte (e-mail + mot de passe) puis profil obligatoire (voir
@@ -331,6 +380,8 @@ mesures pour ne jamais montrer un mur sans solution :
 - Suivi de trajet **privé** le jour J : chaque membre lance son propre trajet,
   l'app détecte son arrivée et prévient le groupe (sans jamais partager de
   position en continu entre membres)
+- Suivi d'organisateur, rencontres récurrentes et cercle proche construit sur
+  l'historique réel (voir section "Couche sociale" ci-dessus)
 
 ## Prochaines étapes recommandées
 

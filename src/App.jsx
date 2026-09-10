@@ -217,6 +217,32 @@ async function guessCountryFromIP() {
 
 const BADGE_THRESHOLD = 3;
 
+// Nombre maximal d'occurrences pré-générées d'un coup pour une série récurrente (y compris pour
+// "jusqu'à nouvel ordre", faute de tâche planifiée côté serveur pour en générer d'autres plus
+// tard) — voir generateSeriesOccurrences. L'organisateur peut toujours recréer une série une fois
+// celle-ci épuisée.
+const SERIES_OCCURRENCE_CAP = 12;
+const SERIES_STEP_DAYS = { weekly: 7, biweekly: 14 };
+const SERIES_LABEL_KEY = { weekly: 'series.badge.weekly', biweekly: 'series.badge.biweekly', monthly: 'series.badge.monthly' };
+
+// Calcule les dates ISO (datetime-local) des occurrences suivantes d'une série, en partant de la
+// première date fournie, jusqu'à la date de fin (incluse) ou le plafond SERIES_OCCURRENCE_CAP.
+function generateSeriesOccurrences(startDatetime, frequency, endDate) {
+  const dates = [];
+  let current = new Date(startDatetime);
+  if (isNaN(current.getTime())) return dates;
+  const endTime = endDate ? new Date(`${endDate}T23:59`).getTime() : null;
+  for (let i = 0; i < SERIES_OCCURRENCE_CAP; i++) {
+    if (endTime !== null && current.getTime() > endTime) break;
+    dates.push(toDatetimeLocalValue(current));
+    const next = new Date(current);
+    if (frequency === 'monthly') next.setMonth(next.getMonth() + 1);
+    else next.setDate(next.getDate() + (SERIES_STEP_DAYS[frequency] || 7));
+    current = next;
+  }
+  return dates;
+}
+
 // Délai après l'heure prévue avant de demander à l'organisateur si la rencontre est toujours en
 // cours, et avant d'inviter les participants à laisser un avis si personne n'a répondu.
 const MEETUP_CHECKIN_DELAY_MS = 30 * 60 * 1000;
@@ -593,6 +619,15 @@ export default function RezoApp() {
   const [userBio, setUserBio] = useState('');
   const [showProfilePage, setShowProfilePage] = useState(false);
   const [showSettingsSheet, setShowSettingsSheet] = useState(false);
+  // Profil public d'un organisateur consulté (tap sur son nom depuis une carte) : null = son propre
+  // profil. Couverture/bio/activités/pays publiés systématiquement (comme l'avatar) dans
+  // public-profiles ; nom de famille/ville restent soumis à leurs bascules dédiées existantes.
+  const [viewedProfileName, setViewedProfileName] = useState(null);
+  const [publicProfiles, setPublicProfiles] = useState({});
+  // Qui suit qui : { [abonné]: [organisateur1, organisateur2, ...] } — jamais affiché comme liste
+  // publique complète (voir Objectif "limite à poser"), seulement utilisé pour compter/vérifier.
+  const [follows, setFollows] = useState({});
+  const [showCirclePage, setShowCirclePage] = useState(false);
   // Langue d'interface : par appareil tant qu'aucun compte n'est connecté, puis synchronisée dans
   // le compte (voir setLanguage) — jamais bloquant, repli FR géré par translate() si une clé manque.
   const [language, setLanguageState] = useState('fr');
@@ -658,6 +693,7 @@ export default function RezoApp() {
   const [mineOnly, setMineOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [seriesJoinChoice, setSeriesJoinChoice] = useState(null);
   const [reportingMeetup, setReportingMeetup] = useState(null);
   const [invitingMeetup, setInvitingMeetup] = useState(null);
   const [inviteNameDraft, setInviteNameDraft] = useState('');
@@ -805,21 +841,50 @@ export default function RezoApp() {
     }
   }, []);
 
+  // Prénom -> { cover, bio, preferences, country } : contrairement au nom/à la ville, publiées
+  // systématiquement (comme l'avatar) dès que le profil est complété — pas de bascule dédiée, voir
+  // Objectif "vraie page d'identité sociale" de la demande de refonte du profil.
+  const loadPublicProfiles = useCallback(async (silent) => {
+    try {
+      const res = await window.storage.get('public-profiles', true);
+      const map = res && res.value ? JSON.parse(res.value) : {};
+      setPublicProfiles(map && typeof map === 'object' ? map : {});
+    } catch (err) {
+      if (!silent) setPublicProfiles({});
+    }
+  }, []);
+
+  // { [abonné]: [organisateur, ...] } — voir toggleFollow. Chargé/sondé comme les autres registres
+  // partagés ; jamais exposé comme liste publique complète dans l'UI (seulement des comptages).
+  const loadFollows = useCallback(async (silent) => {
+    try {
+      const res = await window.storage.get('follows', true);
+      const map = res && res.value ? JSON.parse(res.value) : {};
+      setFollows(map && typeof map === 'object' ? map : {});
+    } catch (err) {
+      if (!silent) setFollows({});
+    }
+  }, []);
+
   useEffect(() => {
     loadMeetups(false);
     loadProfiles(false);
     loadVerified(false);
     loadPublicLastNames(false);
     loadPublicCities(false);
+    loadPublicProfiles(false);
+    loadFollows(false);
     const interval = setInterval(() => {
       if (!savingRef.current) loadMeetups(true);
       loadProfiles(true);
       loadVerified(true);
       loadPublicLastNames(true);
       loadPublicCities(true);
+      loadPublicProfiles(true);
+      loadFollows(true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames, loadPublicCities]);
+  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames, loadPublicCities, loadPublicProfiles, loadFollows]);
 
   // Détecte les nouvelles arrivées à chaque rafraîchissement et notifie les membres concernés
   // (pas de partage de position continue : uniquement l'événement "est arrivé·e").
@@ -1025,6 +1090,27 @@ export default function RezoApp() {
     } catch (err) {
       showToast(t('toast.unreadUpdateFailed'));
     }
+  };
+
+  // Abonnement à un organisateur : { [abonné]: [organisateur, ...] } (voir Objectif "limite à
+  // poser" — jamais affiché comme liste publique, seulement un comptage). Relit une copie fraîche
+  // avant d'écrire pour limiter (sans l'éliminer) le risque de course sur ce registre partagé.
+  const toggleFollow = (organizerName) => {
+    requireName(async (name) => {
+      if (name === organizerName) return;
+      try {
+        const res = await window.storage.get('follows', true).catch(() => null);
+        const current = res && res.value ? JSON.parse(res.value) : {};
+        const mine = current[name] || [];
+        const alreadyFollowing = mine.includes(organizerName);
+        current[name] = alreadyFollowing ? mine.filter((n) => n !== organizerName) : [...mine, organizerName];
+        await window.storage.set('follows', JSON.stringify(current), true);
+        setFollows(current);
+        showToast(alreadyFollowing ? t('toast.unfollowed', { name: organizerName }) : t('toast.followed', { name: organizerName }));
+      } catch (err) {
+        showToast(t('toast.unreadUpdateFailed'));
+      }
+    });
   };
 
   // Gamification légère : nombre de rencontres (organisées ou rejointes) ce mois-ci civil.
@@ -1273,6 +1359,8 @@ export default function RezoApp() {
   // — accessible depuis l'onglet "Profil" de la barre du bas une fois le profil complet.
   const openProfilePage = () => {
     if (userEmail && userName && userLastName && userGender && userPreferences.length > 0) {
+      setViewedProfileName(null);
+      setShowCirclePage(false);
       setShowProfilePage(true);
     } else {
       requireName(() => {});
@@ -1731,6 +1819,19 @@ export default function RezoApp() {
       else delete nextPublicCities[trimmed];
       await window.storage.set('public-cities', JSON.stringify(nextPublicCities), true);
       setPublicCities(nextPublicCities);
+      // Couverture/bio/activités/pays : publiées systématiquement (comme l'avatar), pour que la
+      // page de profil public d'un organisateur (voir tap sur son nom depuis une carte) ait de quoi
+      // s'afficher sans dépendre d'une bascule supplémentaire.
+      const profilesPubRes = await window.storage.get('public-profiles', true).catch(() => null);
+      const nextPublicProfiles = profilesPubRes && profilesPubRes.value ? JSON.parse(profilesPubRes.value) : {};
+      nextPublicProfiles[trimmed] = {
+        cover: finalCover || null,
+        bio: trimmedBio,
+        preferences: preferencesDraft,
+        country: countryDraft,
+      };
+      await window.storage.set('public-profiles', JSON.stringify(nextPublicProfiles), true);
+      setPublicProfiles(nextPublicProfiles);
     } catch (err) {
       // continue even if persistence fails
     }
@@ -1831,13 +1932,11 @@ export default function RezoApp() {
         return;
       }
 
-      const newMeetup = {
-        id: uid(),
+      const baseMeetup = {
         title: form.title.trim(),
         activity: form.activity,
         zone: form.zone.trim(),
         location: form.location.trim(),
-        datetime: form.datetime,
         maxParticipants: Number(form.maxParticipants) || 8,
         note: form.note.trim(),
         host: name,
@@ -1845,22 +1944,91 @@ export default function RezoApp() {
         audience,
         ageMin: Number(form.ageMin) || 18,
         ageMax: Number(form.ageMax) || 99,
-        participants: [name],
-        participantGenders: { [name]: gender },
         pendingRequests: [],
         createdAt: new Date().toISOString(),
         coords: form.useLocation && userCoords ? userCoords : null,
       };
-      const updated = [newMeetup, ...meetups];
+
+      // Récurrence : génère toutes les occurrences d'un coup (voir generateSeriesOccurrences),
+      // chacune sa propre rencontre indépendante partageant seriesId/seriesFrequency — l'organisateur
+      // ne participe (comme pour une rencontre simple) qu'à chaque occurrence individuellement.
+      const isRecurring = form.recurrence && form.recurrence !== 'none';
+      const occurrenceDates = isRecurring
+        ? generateSeriesOccurrences(form.datetime, form.recurrence, form.recurrenceEndDate)
+        : [form.datetime];
+      const seriesId = isRecurring ? uid() : null;
+      const newMeetups = occurrenceDates.map((datetime, index) => ({
+        ...baseMeetup,
+        id: uid(),
+        datetime,
+        participants: [name],
+        participantGenders: { [name]: gender },
+        ...(isRecurring ? { seriesId, seriesFrequency: form.recurrence, seriesIndex: index } : {}),
+      }));
+
+      const updated = [...newMeetups, ...meetups];
       await saveMeetups(updated);
       setShowCreate(false);
       setTemplateDraft(null);
       showToast(t('toast.meetupCreated'));
+
+      // Notifie les abonnés de l'organisateur (voir toggleFollow) qu'une nouvelle rencontre vient
+      // d'être publiée — uniquement pour la toute première occurrence, pas pour chaque occurrence
+      // pré-générée d'une série.
+      try {
+        const followsRes = await window.storage.get('follows', true).catch(() => null);
+        const followsMap = followsRes && followsRes.value ? JSON.parse(followsRes.value) : {};
+        const followers = Object.keys(followsMap).filter((follower) => (followsMap[follower] || []).includes(name));
+        followers.forEach((follower) => {
+          notifyByName(follower, 'REZO', t('toast.newMeetupFromFollowed', { name, title: newMeetups[0].title }), '/');
+        });
+      } catch (err) {
+        // best effort, la rencontre reste créée même si la notification échoue
+      }
     });
   };
 
   // "Rejoindre" envoie désormais une demande ; seul l'organisateur peut l'accepter.
   // Quitter une rencontre, en revanche, reste immédiat (pas d'approbation nécessaire).
+  const performJoin = async (meetup, name, gender, wantsSeries) => {
+    // Rencontres "Équipe REZO" (contenu de démarrage) : pas de vrai hôte connectable pour valider
+    // les demandes, donc adhésion immédiate plutôt que de rester bloqué en attente pour toujours.
+    if (meetup.host === REZO_HOST_NAME) {
+      const updated = meetups.map((m) =>
+        m.id === meetup.id
+          ? {
+              ...m,
+              participants: [...m.participants, name],
+              participantGenders: { ...(m.participantGenders || {}), [name]: gender },
+            }
+          : m
+      );
+      await saveMeetups(updated);
+      showToast(t('toast.joined'));
+      return;
+    }
+
+    const updated = meetups.map((m) =>
+      m.id === meetup.id
+        ? {
+            ...m,
+            pendingRequests: [
+              ...(m.pendingRequests || []),
+              { name, gender, requestedAt: new Date().toISOString(), wantsSeries: !!wantsSeries },
+            ],
+          }
+        : m
+    );
+    await saveMeetups(updated);
+    showToast(wantsSeries ? t('toast.seriesJoinedAll') : t('toast.requestSent'));
+    notifyByName(
+      meetup.host,
+      'Nouvelle demande',
+      `${name} veut rejoindre "${meetup.title}"`,
+      '/'
+    );
+  };
+
   const requestOrLeave = (meetup) => {
     requireName(async (name, gender) => {
       const isParticipant = meetup.participants.includes(name);
@@ -1905,39 +2073,12 @@ export default function RezoApp() {
         return;
       }
 
-      // Rencontres "Équipe REZO" (contenu de démarrage) : pas de vrai hôte connectable pour valider
-      // les demandes, donc adhésion immédiate plutôt que de rester bloqué en attente pour toujours.
-      if (meetup.host === REZO_HOST_NAME) {
-        const updated = meetups.map((m) =>
-          m.id === meetup.id
-            ? {
-                ...m,
-                participants: [...m.participants, name],
-                participantGenders: { ...(m.participantGenders || {}), [name]: gender },
-              }
-            : m
-        );
-        await saveMeetups(updated);
-        showToast(t('toast.joined'));
+      if (meetup.seriesId && meetup.host !== REZO_HOST_NAME) {
+        setSeriesJoinChoice({ meetup, name, gender });
         return;
       }
 
-      const updated = meetups.map((m) =>
-        m.id === meetup.id
-          ? {
-              ...m,
-              pendingRequests: [...(m.pendingRequests || []), { name, gender, requestedAt: new Date().toISOString() }],
-            }
-          : m
-      );
-      await saveMeetups(updated);
-      showToast(t('toast.requestSent'));
-      notifyByName(
-        meetup.host,
-        'Nouvelle demande',
-        `${name} veut rejoindre "${meetup.title}"`,
-        '/'
-      );
+      await performJoin(meetup, name, gender, false);
     });
   };
 
@@ -1946,13 +2087,32 @@ export default function RezoApp() {
       showToast(t('toast.cantAcceptFull'));
       return;
     }
+    const request = (meetup.pendingRequests || []).find((r) => r.name === requesterName);
+    const wantsSeries = !!(accept && request && request.wantsSeries && meetup.seriesId);
     const updated = meetups.map((m) => {
-      if (m.id !== meetup.id) return m;
-      const request = (m.pendingRequests || []).find((r) => r.name === requesterName);
-      const pendingRequests = (m.pendingRequests || []).filter((r) => r.name !== requesterName);
-      if (!accept || !request) return { ...m, pendingRequests };
-      const participantGenders = { ...(m.participantGenders || {}), [requesterName]: request.gender };
-      return { ...m, pendingRequests, participants: [...m.participants, requesterName], participantGenders };
+      if (m.id === meetup.id) {
+        const pendingRequests = (m.pendingRequests || []).filter((r) => r.name !== requesterName);
+        if (!accept || !request) return { ...m, pendingRequests };
+        const participantGenders = { ...(m.participantGenders || {}), [requesterName]: request.gender };
+        return { ...m, pendingRequests, participants: [...m.participants, requesterName], participantGenders };
+      }
+      // Cascade : abonné à toute la série, on l'inscrit directement aux prochaines occurrences
+      // (la validation initiale de l'organisateur suffit, pas de re-validation à chaque fois).
+      if (
+        wantsSeries &&
+        m.seriesId === meetup.seriesId &&
+        !m.closed &&
+        !isPast(m) &&
+        !m.participants.includes(requesterName) &&
+        m.participants.length < m.maxParticipants
+      ) {
+        return {
+          ...m,
+          participants: [...m.participants, requesterName],
+          participantGenders: { ...(m.participantGenders || {}), [requesterName]: request.gender },
+        };
+      }
+      return m;
     });
     await saveMeetups(updated);
     showToast(
@@ -2071,26 +2231,43 @@ export default function RezoApp() {
     return { avg: scores.reduce((a, b) => a + b, 0) / scores.length, count: scores.length };
   };
 
+  // Page de profil consultée : la sienne par défaut, ou celle d'un·e organisateur·trice quand on
+  // tape sur "Organisé par X" depuis une carte — toutes les stats ci-dessous sont génériques et
+  // se recalculent pour la personne consultée (viewedProfileName), pas seulement userName.
+  const profileTargetName = viewedProfileName || userName;
+  const isOwnProfile = !viewedProfileName || viewedProfileName === userName;
+  const viewedPublicProfile = publicProfiles[profileTargetName] || {};
+  const profileAvatarUrl = isOwnProfile ? userAvatar : (profilesMap[profileTargetName] || null);
+  const profileCoverUrl = isOwnProfile ? userCover : (viewedPublicProfile.cover || null);
+  const profileBio = isOwnProfile ? userBio : (viewedPublicProfile.bio || '');
+  const profilePreferences = isOwnProfile ? userPreferences : (viewedPublicProfile.preferences || []);
+  const profileCountry = isOwnProfile ? userCountry : (viewedPublicProfile.country || '');
+  const profileCity = isOwnProfile ? userCity : (publicCities[profileTargetName] || '');
+  const profileLastName = isOwnProfile ? userLastName : (publicLastNames[profileTargetName] || '');
+  const profileVerified = isOwnProfile ? userPhoneVerified : !!verifiedMap[profileTargetName];
+  const profileFollowersCount = Object.keys(follows).filter((follower) => (follows[follower] || []).includes(profileTargetName)).length;
+  const isFollowingProfile = !!(follows[userName] || []).includes(profileTargetName);
+
   // Statistiques de la page de profil : uniquement des rencontres réellement clôturées (même
   // philosophie que monthlyCount/canRate — un chiffre qui reflète une vraie participation vécue).
-  const organizedCount = userName ? meetups.filter((m) => m.closed && m.host === userName).length : 0;
-  const participatedCount = userName
-    ? meetups.filter((m) => m.closed && m.host !== userName && m.participants.includes(userName)).length
+  const organizedCount = profileTargetName ? meetups.filter((m) => m.closed && m.host === profileTargetName).length : 0;
+  const participatedCount = profileTargetName
+    ? meetups.filter((m) => m.closed && m.host !== profileTargetName && m.participants.includes(profileTargetName)).length
     : 0;
-  const myRatingStats = userName ? hostRatingStats(userName) : null;
+  const myRatingStats = profileTargetName ? hostRatingStats(profileTargetName) : null;
   // Nombre de fois où l'utilisateur a été le·la premier·ère arrivé·e sur place (voir markArrival).
-  const firstArrivalCount = userName
+  const firstArrivalCount = profileTargetName
     ? meetups.filter((m) => {
-        if (!m.arrivals || !m.arrivals[userName]) return false;
+        if (!m.arrivals || !m.arrivals[profileTargetName]) return false;
         const times = Object.values(m.arrivals).map((t) => new Date(t).getTime());
-        return new Date(m.arrivals[userName]).getTime() === Math.min(...times);
+        return new Date(m.arrivals[profileTargetName]).getTime() === Math.min(...times);
       }).length
     : 0;
   // Historique : dernières rencontres clôturées (organisées ou rejointes), plus récentes d'abord —
   // aperçu affiché sur la page de profil, avec renvoi vers "Mes sorties" pour la liste complète.
-  const profileHistory = userName
+  const profileHistory = profileTargetName
     ? meetups
-        .filter((m) => m.closed && (m.host === userName || m.participants.includes(userName)))
+        .filter((m) => m.closed && (m.host === profileTargetName || m.participants.includes(profileTargetName)))
         .sort((a, b) => new Date(b.datetime) - new Date(a.datetime))
         .slice(0, 3)
     : [];
@@ -2305,11 +2482,17 @@ export default function RezoApp() {
 
   useEffect(() => stopJourney, []);
 
-  const deleteMeetup = async (id) => {
-    const updated = meetups.filter((m) => m.id !== id);
+  const deleteMeetup = async (id, scope = 'single') => {
+    const target = meetups.find((m) => m.id === id);
+    let updated;
+    if (scope === 'series' && target && target.seriesId) {
+      updated = meetups.filter((m) => !(m.seriesId === target.seriesId && !m.closed && !isPast(m)));
+    } else {
+      updated = meetups.filter((m) => m.id !== id);
+    }
     await saveMeetups(updated);
     setConfirmDeleteId(null);
-    showToast(t('toast.meetupDeleted'));
+    showToast(scope === 'series' ? t('series.stopped') : t('toast.meetupDeleted'));
     if (chatMeetup && chatMeetup.id === id) setChatMeetup(null);
   };
 
@@ -2389,11 +2572,25 @@ export default function RezoApp() {
     return d.getTime() < Date.now() - 2 * 60 * 60 * 1000; // grâce de 2h après le début
   };
 
-  const withDistance = meetups.map((m) => ({
+  const withDistanceRaw = meetups.map((m) => ({
     ...m,
     _distance: userCoords && m.coords ? distanceKm(userCoords, m.coords) : null,
     _bearing: userCoords && m.coords ? bearingDeg(userCoords, m.coords) : null,
   }));
+
+  // Une série récurrente n'occupe qu'une seule carte dans le flux (la prochaine occurrence à
+  // venir) — les occurrences futures déjà générées existent en base mais n'apparaissent qu'à leur
+  // tour. Les occurrences passées/clôturées restent toutes visibles (historique, "Mes sorties").
+  const nextOccurrenceBySeries = new Map();
+  withDistanceRaw.forEach((m) => {
+    if (!m.seriesId || m.closed || isPast(m)) return;
+    const current = nextOccurrenceBySeries.get(m.seriesId);
+    if (!current || new Date(m.datetime) < new Date(current.datetime)) nextOccurrenceBySeries.set(m.seriesId, m);
+  });
+  const withDistance = withDistanceRaw.filter((m) => {
+    if (!m.seriesId || m.closed || isPast(m)) return true;
+    return nextOccurrenceBySeries.get(m.seriesId)?.id === m.id;
+  });
 
   const ageFilterActive = ageFilterMin > 16 || ageFilterMax < 99;
   const activeFilterCount =
@@ -2454,7 +2651,65 @@ export default function RezoApp() {
     return matchesZoneText;
   };
 
+  // Toutes les personnes croisées par l'utilisateur (co-participants ou organisateurs de
+  // rencontres passées ou en cours) — sert de base à "déjà rencontré" / "amis en commun".
+  // La confiance vient de la familiarité, pas de l'anonymat.
+  const knownPeople = new Set();
+  if (userName) {
+    meetups.forEach((m) => {
+      const inThisOne = m.host === userName || m.participants.includes(userName);
+      if (!inThisOne) return;
+      if (m.host !== userName) knownPeople.add(m.host);
+      m.participants.forEach((p) => {
+        if (p !== userName) knownPeople.add(p);
+      });
+    });
+  }
+
+  // "Organisé par quelqu'un que tu as déjà rencontré" : un vrai lien vécu, pas une co-inscription.
+  // Ne compte que les organisateurs d'une rencontre CLÔTURÉE où l'utilisateur figurait comme
+  // participant accepté (jamais une rencontre à venir/en cours, ni une simple demande en attente).
+  const metHosts = new Set();
+  if (userName) {
+    meetups.forEach((m) => {
+      if (!m.closed || m.host === userName) return;
+      if (m.participants.includes(userName)) metHosts.add(m.host);
+    });
+  }
+
+  // "Cercle proche" : toute personne avec qui l'utilisateur a terminé au moins une rencontre
+  // ensemble (côté hôte ou participant, dans les deux sens) — bâti sur l'historique réel, pas
+  // un système d'ami déclaratif. Sert au tri léger du flux et à la page "Mon cercle".
+  const closeCircle = new Map();
+  if (userName) {
+    meetups.forEach((m) => {
+      if (!m.closed) return;
+      const wasThere = m.host === userName || m.participants.includes(userName);
+      if (!wasThere) return;
+      const others = [m.host, ...m.participants].filter((p) => p && p !== userName);
+      const uniqueOthers = [...new Set(others)];
+      uniqueOthers.forEach((person) => {
+        const entry = closeCircle.get(person) || { count: 0, lastDate: null };
+        entry.count += 1;
+        if (!entry.lastDate || new Date(m.datetime) > new Date(entry.lastDate)) entry.lastDate = m.datetime;
+        closeCircle.set(person, entry);
+      });
+    });
+  }
+
+  // Priorité de tri légère (pas un filtre) : une rencontre où au moins une personne du cercle
+  // proche est déjà inscrite remonte, sans jamais masquer les autres.
+  const hasCircleMember = (m) => !!(userName && m.participants.some((p) => p !== userName && closeCircle.has(p)));
+
+  // Liste pour la page "Mon cercle" : les personnes les plus rencontrées d'abord.
+  const circleList = [...closeCircle.entries()]
+    .map(([name, info]) => ({ name, count: info.count, lastDate: info.lastDate }))
+    .sort((a, b) => b.count - a.count || new Date(b.lastDate) - new Date(a.lastDate));
+
   const byDistanceThenDate = (x, y) => {
+    const xBoost = hasCircleMember(x) ? 0 : 1;
+    const yBoost = hasCircleMember(y) ? 0 : 1;
+    if (xBoost !== yBoost) return xBoost - yBoost;
     if (x._distance !== null && y._distance !== null) return x._distance - y._distance;
     if (x._distance !== null) return -1;
     if (y._distance !== null) return 1;
@@ -2497,37 +2752,21 @@ export default function RezoApp() {
         .slice(0, 6)
     : [];
 
+  // "De tes abonnements" : rencontres à venir des organisateurs suivis, distinct de "Recommandé
+  // pour toi" (basé sur les activités préférées, pas les abonnements).
+  const followedOrganizers = userName ? follows[userName] || [] : [];
+  const fromFollowed = followedOrganizers.length
+    ? withDistance
+        .filter((m) => followedOrganizers.includes(m.host) && !isPast(m) && !m.closed)
+        .sort(byDistanceThenDate)
+        .slice(0, 6)
+    : [];
+
   // Suggestions d'autocomplétion de la barre "Rechercher une activité" — sur le nom des
   // catégories, remplace la rangée d'icônes retirée de cet écran.
   const activitySuggestions = activityQuery.trim()
     ? ACTIVITIES.filter((a) => aLabel(a.id).toLowerCase().includes(activityQuery.trim().toLowerCase())).slice(0, 6)
     : [];
-
-  // Toutes les personnes croisées par l'utilisateur (co-participants ou organisateurs de
-  // rencontres passées ou en cours) — sert de base à "déjà rencontré" / "amis en commun".
-  // La confiance vient de la familiarité, pas de l'anonymat.
-  const knownPeople = new Set();
-  if (userName) {
-    meetups.forEach((m) => {
-      const inThisOne = m.host === userName || m.participants.includes(userName);
-      if (!inThisOne) return;
-      if (m.host !== userName) knownPeople.add(m.host);
-      m.participants.forEach((p) => {
-        if (p !== userName) knownPeople.add(p);
-      });
-    });
-  }
-
-  // "Organisé par quelqu'un que tu as déjà rencontré" : un vrai lien vécu, pas une co-inscription.
-  // Ne compte que les organisateurs d'une rencontre CLÔTURÉE où l'utilisateur figurait comme
-  // participant accepté (jamais une rencontre à venir/en cours, ni une simple demande en attente).
-  const metHosts = new Set();
-  if (userName) {
-    meetups.forEach((m) => {
-      if (!m.closed || m.host === userName) return;
-      if (m.participants.includes(userName)) metHosts.add(m.host);
-    });
-  }
 
   // Rendu d'une carte de rencontre, partagé entre la liste normale (groupée par activité)
   // et la liste de repli "à proximité" (quand le flux local est vide).
@@ -2556,6 +2795,11 @@ export default function RezoApp() {
     const mutualCount = !isHost && !isIn && !alreadyMetHost
       ? m.participants.filter((p) => p !== userName && knownPeople.has(p)).length
       : 0;
+    // Mention "Avec Sarah, que tu as déjà rencontrée" — priorité à un participant du cercle
+    // proche (lien vécu), jamais l'hôte lui-même s'il est déjà signalé via alreadyMetHost.
+    const circleMemberInMeetup = !isIn
+      ? m.participants.find((p) => p !== userName && closeCircle.has(p))
+      : null;
     // Une rencontre clôturée est traitée comme passée partout (badge "Terminée", fin du join,
     // masquage du badge "En cours"...) même si le délai de grâce de 2h n'est pas encore écoulé.
     const past = isPast(m) || m.closed;
@@ -2610,6 +2854,11 @@ export default function RezoApp() {
             {audience === 'femmes' ? t('audience.femmes') : t('audience.hommes')}
           </span>
         )}
+        {m.seriesId && SERIES_LABEL_KEY[m.seriesFrequency] && (
+          <span className="series-badge">
+            🔁 {t(SERIES_LABEL_KEY[m.seriesFrequency])}
+          </span>
+        )}
         {m.started && !past && (
           <span className="live-badge">
             <span className="pulse"></span> {t('card.live')}
@@ -2634,7 +2883,20 @@ export default function RezoApp() {
           <div className="card-meta-row"><Clock size={12} /> {formatWhen(m.datetime, language)}{past && ` · ${t('card.ended')}`}</div>
           <div className="card-meta-row"><Cake size={12} /> {formatAgeRange(m.ageMin, m.ageMax, t)}</div>
           <div className="card-meta-row">
-            {t('card.organizedBy', { host: m.host })}{publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}
+            {interpolateNodes(t('card.organizedBy', { host: '{host}' }), {
+              host: isHost ? (
+                m.host
+              ) : (
+                <button
+                  type="button"
+                  className="card-host-link"
+                  onClick={(e) => { e.stopPropagation(); setViewedProfileName(m.host); setShowProfilePage(true); }}
+                >
+                  {m.host}
+                </button>
+              ),
+            })}
+            {publicLastNames[m.host] ? ` ${publicLastNames[m.host]}` : ''}
             {publicCities[m.host] ? ` · ${publicCities[m.host]}` : ''}{isHost ? t('card.you') : ''}
             {hostVerified && (
               <span className="card-verified-badge" title={t('card.verified')}>
@@ -2643,6 +2905,11 @@ export default function RezoApp() {
             )}
             {hostStats && <StarDisplay value={hostStats.avg} count={hostStats.count} size={11} />}
           </div>
+          {circleMemberInMeetup && (
+            <div className="card-meta-row card-circle-mention">
+              <Users size={12} /> {t('card.withCircleMember', { name: circleMemberInMeetup })}
+            </div>
+          )}
           {satisfactionStats && (
             <div className="card-meta-row">
               {t('card.satisfaction')} <StarDisplay value={satisfactionStats.avg} count={satisfactionStats.count} size={11} />
@@ -3216,6 +3483,11 @@ export default function RezoApp() {
         }
         .audience-badge.audience-femmes { background: rgba(239,122,155,0.16); color: #EF7A9B; }
         .audience-badge.audience-hommes { background: rgba(79,209,197,0.16); color: #4FD1C5; }
+        .series-badge {
+          align-self: flex-start;
+          font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+          background: rgba(124,131,253,0.16); color: #8B93FF;
+        }
         .live-badge {
           align-self: flex-start; display: flex; align-items: center; gap: 5px;
           font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
@@ -3237,6 +3509,12 @@ export default function RezoApp() {
         .avatar.more { background: var(--border); color: var(--muted); }
         .card-meta { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
         .card-meta-row { display: flex; align-items: center; gap: 6px; }
+        .card-host-link {
+          background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+          color: var(--text); font-weight: 600; font-size: inherit; font-family: inherit;
+        }
+        .card-host-link:hover { text-decoration: underline; }
+        .card-circle-mention { color: var(--live); font-weight: 500; }
         .maps-link {
           display: inline-flex; align-items: center; gap: 4px; width: fit-content;
           font-size: 11px; color: var(--live); text-decoration: none;
@@ -3511,6 +3789,40 @@ export default function RezoApp() {
         .profile-section-link {
           background: none; border: none; color: var(--live); font-size: 12px; font-weight: 600;
           cursor: pointer; display: flex; align-items: center; gap: 2px; font-family: 'Inter', sans-serif;
+        }
+        .profile-circle-link {
+          margin-top: 24px; width: 100%; justify-content: center; padding: 12px;
+          border: 1px solid var(--border); border-radius: 12px; font-size: 13px;
+        }
+        .circle-page-header {
+          display: flex; align-items: center; gap: 12px; padding: 16px 18px 4px;
+        }
+        .circle-page-title {
+          font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 700;
+        }
+        .circle-page-body { padding: 10px 18px 32px; }
+        .circle-page-subtitle { font-size: 12.5px; color: var(--muted); line-height: 1.4; margin-bottom: 16px; }
+        .circle-list { display: flex; flex-direction: column; gap: 6px; }
+        .circle-row {
+          display: flex; align-items: center; gap: 12px; width: 100%; text-align: start;
+          background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+          padding: 10px 12px; cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .circle-row:hover { background: var(--card-hover); }
+        .circle-row-mid { flex: 1; min-width: 0; }
+        .circle-row-name { font-size: 13.5px; font-weight: 700; color: var(--text); }
+        .circle-row-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+        .circle-row-cta {
+          display: flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 600;
+          color: var(--live); white-space: nowrap;
+        }
+        .follow-btn {
+          font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 700;
+          padding: 5px 14px; border-radius: 999px; cursor: pointer;
+          background: var(--live); color: #fff; border: 1px solid var(--live);
+        }
+        .follow-btn.following {
+          background: transparent; color: var(--live);
         }
         .profile-activity-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
         .profile-activity-tag {
@@ -4085,6 +4397,33 @@ export default function RezoApp() {
         </div>
       )}
 
+      {fromFollowed.length > 0 && (
+        <div className="recommended-wrap">
+          <div className="recommended-title">
+            <Users size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 5 }} color="var(--live)" />
+            {t('home.fromFollowed')}
+          </div>
+          <div className="recommended-scroll">
+            {fromFollowed.map((m) => {
+              const color = activityById(m.activity).color;
+              return (
+                <button
+                  key={m.id}
+                  className="recommended-card"
+                  onClick={() => setSelectedActivity(m.activity)}
+                >
+                  <span className="swatch" style={{ background: color }}></span>
+                  <div className="recommended-card-title">{m.title}</div>
+                  <div className="recommended-card-meta">
+                    {m.zone || 'Zone non précisée'} · {formatWhen(m.datetime, language)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {recommended.length > 0 && (
         <div className="recommended-wrap">
           <div className="recommended-title">
@@ -4292,28 +4631,28 @@ export default function RezoApp() {
       <nav className="bottom-nav">
         <button
           className={`bottom-nav-item ${!mineOnly ? 'active' : ''}`}
-          onClick={() => setMineOnly(false)}
+          onClick={() => { setShowProfilePage(false); setShowCirclePage(false); setMineOnly(false); }}
         >
           <Home size={20} />
           <span>{t('nav.discover')}</span>
         </button>
         <button
           className={`bottom-nav-item ${mineOnly ? 'active' : ''}`}
-          onClick={() => setMineOnly(true)}
+          onClick={() => { setShowProfilePage(false); setShowCirclePage(false); setMineOnly(true); }}
         >
           <Bookmark size={20} />
           <span>{t('nav.mySorties')}</span>
         </button>
         <button
           className="bottom-nav-center"
-          onClick={() => requireName(() => setShowCreate(true))}
+          onClick={() => requireName(() => { setShowProfilePage(false); setShowCirclePage(false); setShowCreate(true); })}
           aria-label={t('nav.create')}
         >
           <Plus size={24} />
         </button>
         <button
           className={`bottom-nav-item ${filtersOpen ? 'active' : ''}`}
-          onClick={() => setFiltersOpen(true)}
+          onClick={() => { setShowProfilePage(false); setShowCirclePage(false); setFiltersOpen(true); }}
         >
           <SlidersHorizontal size={20} />
           <span>{t('nav.filters')}</span>
@@ -4862,75 +5201,102 @@ export default function RezoApp() {
         </div>
       )}
 
-      {showProfilePage && userName && (
+      {showProfilePage && profileTargetName && (
         <div className="profile-page">
           <div className="profile-page-scroll">
             <div
               className="profile-page-cover"
-              style={userCover ? { backgroundImage: `url(${userCover})` } : undefined}
+              style={profileCoverUrl ? { backgroundImage: `url(${profileCoverUrl})` } : undefined}
             ></div>
-            <button className="profile-page-nav-btn profile-page-back" onClick={() => setShowProfilePage(false)} title={t('auth.back')}>
+            <button
+              className="profile-page-nav-btn profile-page-back"
+              onClick={() => (isOwnProfile ? setShowProfilePage(false) : setViewedProfileName(null))}
+              title={isOwnProfile ? t('auth.back') : t('profile.backToOwn')}
+            >
               <ChevronRight size={18} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)' }} />
             </button>
-            <button className="profile-page-nav-btn profile-page-settings" onClick={() => setShowSettingsSheet(true)} title={t('settings.title')}>
-              <Settings size={18} />
-            </button>
+            {isOwnProfile && (
+              <button className="profile-page-nav-btn profile-page-settings" onClick={() => setShowSettingsSheet(true)} title={t('settings.title')}>
+                <Settings size={18} />
+              </button>
+            )}
 
             <div className="profile-page-avatar-wrap">
-              <Avatar name={userName} avatarUrl={userAvatar} size={104} />
+              <Avatar name={profileTargetName} avatarUrl={profileAvatarUrl} size={104} />
             </div>
 
             <div className="profile-page-body">
               <div className="profile-page-name">
-                {userName} {userLastName}
-                {userPhoneVerified && (
+                {profileTargetName} {profileLastName}
+                {profileVerified && (
                   <span className="card-verified-badge" title={t('card.verified')}>
                     <ShieldCheck size={13} /> {t('card.verified')}
                   </span>
                 )}
               </div>
               {myRatingStats && (
-                <div style={{ marginTop: 2 }}>
+                <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <StarDisplay value={myRatingStats.avg} count={myRatingStats.count} size={14} />
+                  {!isOwnProfile && (
+                    <button
+                      className={`follow-btn ${isFollowingProfile ? 'following' : ''}`}
+                      onClick={() => toggleFollow(profileTargetName)}
+                    >
+                      {isFollowingProfile ? t('follow.following') : t('follow.follow')}
+                    </button>
+                  )}
                 </div>
               )}
-              {(userCity || userCountry) && (
+              {!myRatingStats && !isOwnProfile && (
+                <div style={{ marginTop: 6 }}>
+                  <button
+                    className={`follow-btn ${isFollowingProfile ? 'following' : ''}`}
+                    onClick={() => toggleFollow(profileTargetName)}
+                  >
+                    {isFollowingProfile ? t('follow.following') : t('follow.follow')}
+                  </button>
+                </div>
+              )}
+              <div className="profile-page-subtitle">
+                {profileFollowersCount === 1 ? t('follow.followers', { count: profileFollowersCount }) : t('follow.followersPlural', { count: profileFollowersCount })}
+              </div>
+              {(profileCity || profileCountry) && (
                 <div className="profile-page-subtitle">
-                  <MapPin size={12} /> {[userCity, userCountry].filter(Boolean).join(', ')}
+                  <MapPin size={12} /> {[profileCity, profileCountry].filter(Boolean).join(', ')}
                 </div>
               )}
 
               <div className="profile-stats-row">
                 <button
                   className="profile-stat"
-                  onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                  onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
                 >
                   <div className="profile-stat-value">{organizedCount}</div>
                   <div className="profile-stat-label">{t('profile.organized')}</div>
                 </button>
                 <button
                   className="profile-stat"
-                  onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                  onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
                 >
                   <div className="profile-stat-value">{participatedCount}</div>
                   <div className="profile-stat-label">{t('profile.completed')}</div>
                 </button>
                 <button
                   className="profile-stat"
-                  onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                  onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
                 >
                   <div className="profile-stat-value">{myRatingStats ? myRatingStats.avg.toFixed(1) : '—'}</div>
                   <div className="profile-stat-label">{myRatingStats ? t('profile.avgRating') : t('profile.reviewsReceived')}</div>
                 </button>
               </div>
 
-              {userBio && <div className="profile-bio">{userBio}</div>}
+              {profileBio && <div className="profile-bio">{profileBio}</div>}
 
-              {userPreferences.length > 0 && (
+              {profilePreferences.length > 0 && (
                 <div className="profile-section">
                   <div className="profile-section-title">{t('profile.preferredActivities')}</div>
                   <div className="profile-activity-tags">
-                    {userPreferences.map((id) => {
+                    {profilePreferences.map((id) => {
                       const a = activityById(id);
                       return (
                         <span
@@ -4965,7 +5331,7 @@ export default function RezoApp() {
               <div className="profile-section">
                 <div className="profile-section-title-row">
                   <div className="profile-section-title">{t('profile.history')}</div>
-                  {profileHistory.length > 0 && (
+                  {isOwnProfile && profileHistory.length > 0 && (
                     <button
                       className="profile-section-link"
                       onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
@@ -4984,7 +5350,7 @@ export default function RezoApp() {
                         <div className="profile-history-mid">
                           <div className="profile-history-title">{m.title}</div>
                           <div className="profile-history-meta">
-                            {formatWhen(m.datetime, language)} · {m.host === userName ? t('profile.organizedRole') : t('profile.participatedRole')}
+                            {formatWhen(m.datetime, language)} · {m.host === profileTargetName ? t('profile.organizedRole') : t('profile.participatedRole')}
                           </div>
                         </div>
                       </div>
@@ -4992,6 +5358,66 @@ export default function RezoApp() {
                   </div>
                 )}
               </div>
+
+              {isOwnProfile && (
+                <button
+                  type="button"
+                  className="profile-section-link profile-circle-link"
+                  onClick={() => { setShowProfilePage(false); setShowCirclePage(true); }}
+                >
+                  <Users size={14} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
+                  {t('nav.myCircle')}
+                  <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none', marginInlineStart: 4 }} />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCirclePage && userName && (
+        <div className="profile-page">
+          <div className="profile-page-scroll">
+            <div className="circle-page-header">
+              <button
+                className="profile-page-nav-btn profile-page-back"
+                style={{ position: 'static' }}
+                onClick={() => setShowCirclePage(false)}
+                title={t('auth.back')}
+              >
+                <ChevronRight size={18} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)' }} />
+              </button>
+              <div className="circle-page-title">{t('circle.title')}</div>
+            </div>
+            <div className="circle-page-body">
+              <div className="circle-page-subtitle">{t('circle.subtitle')}</div>
+              {circleList.length === 0 ? (
+                <div className="near-city-empty">{t('circle.empty')}</div>
+              ) : (
+                <div className="circle-list">
+                  {circleList.map(({ name, count, lastDate }) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className="circle-row"
+                      onClick={() => { setShowCirclePage(false); setViewedProfileName(name); setShowProfilePage(true); }}
+                    >
+                      <Avatar name={name} avatarUrl={profilesMap[name]} size={44} />
+                      <div className="circle-row-mid">
+                        <div className="circle-row-name">{name}</div>
+                        <div className="circle-row-meta">
+                          {count === 1 ? t('circle.sharedMeetup', { count }) : t('circle.sharedMeetups', { count })}
+                          {' · '}{t('circle.lastTogether', { date: formatWhen(lastDate, language) })}
+                        </div>
+                      </div>
+                      <span className="circle-row-cta">
+                        {t('circle.seeUpcoming')}
+                        <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none' }} />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -5091,27 +5517,86 @@ export default function RezoApp() {
         </div>
       )}
 
-      {confirmDeleteId && (
+      {confirmDeleteId && (() => {
+        const targetMeetup = meetups.find((m) => m.id === confirmDeleteId);
+        const isSeries = !!(targetMeetup && targetMeetup.seriesId);
+        return (
+          <div className="modal-overlay">
+            <div className="modal">
+              <div className="modal-header">
+                <div className="modal-title"><Trash2 size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--danger)' }} />{isSeries ? t('series.stopConfirmTitle') : t('modal.delete.title')}</div>
+                <button className="modal-close" onClick={() => setConfirmDeleteId(null)}><X size={18} /></button>
+              </div>
+              <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+                {isSeries ? t('series.stopConfirmBody') : t('modal.delete.body')}
+              </div>
+              {isSeries ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button className="modal-submit modal-submit-danger" onClick={() => deleteMeetup(confirmDeleteId, 'single')}>
+                    {t('series.deleteThisOccurrence')}
+                  </button>
+                  <button className="modal-submit modal-submit-danger" onClick={() => deleteMeetup(confirmDeleteId, 'series')}>
+                    {t('series.deleteWholeSeries')}
+                  </button>
+                  <button
+                    className="modal-submit"
+                    style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)' }}
+                    onClick={() => setConfirmDeleteId(null)}
+                  >
+                    {t('modal.cancel')}
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="modal-submit"
+                    style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)' }}
+                    onClick={() => setConfirmDeleteId(null)}
+                  >
+                    {t('modal.cancel')}
+                  </button>
+                  <button className="modal-submit modal-submit-danger" onClick={() => deleteMeetup(confirmDeleteId, 'single')}>
+                    {t('modal.delete.confirm')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {seriesJoinChoice && (
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">
-              <div className="modal-title"><Trash2 size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--danger)' }} />{t('modal.delete.title')}</div>
-              <button className="modal-close" onClick={() => setConfirmDeleteId(null)}><X size={18} /></button>
+              <div className="modal-title">{t('series.joinChoiceTitle', { title: seriesJoinChoice.meetup.title })}</div>
+              <button className="modal-close" onClick={() => setSeriesJoinChoice(null)}><X size={18} /></button>
             </div>
-            <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
-              {t('modal.delete.body')}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button
                 className="modal-submit"
                 style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)' }}
-                onClick={() => setConfirmDeleteId(null)}
+                onClick={async () => {
+                  const { meetup, name, gender } = seriesJoinChoice;
+                  setSeriesJoinChoice(null);
+                  await performJoin(meetup, name, gender, false);
+                }}
               >
-                {t('modal.cancel')}
+                {t('series.joinOnce')}
               </button>
-              <button className="modal-submit modal-submit-danger" onClick={() => deleteMeetup(confirmDeleteId)}>
-                {t('modal.delete.confirm')}
+              <button
+                className="modal-submit"
+                onClick={async () => {
+                  const { meetup, name, gender } = seriesJoinChoice;
+                  setSeriesJoinChoice(null);
+                  await performJoin(meetup, name, gender, true);
+                }}
+              >
+                {t('series.joinAll')}
               </button>
+              <div style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.4 }}>
+                {t('series.joinAllHint')}
+              </div>
             </div>
           </div>
         </div>
@@ -5451,6 +5936,11 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
   const [ageMin, setAgeMin] = useState(initial?.ageMin || 18);
   const [ageMax, setAgeMax] = useState(initial?.ageMax || 99);
   const [useLocation, setUseLocation] = useState(isEditing ? !!initial?.coords : !!userCoords);
+  // Récurrence : uniquement proposée à la création (pas en édition d'une occurrence existante) —
+  // voir handleCreate pour la génération de la série et REZO_SERIES_CAP pour la limite de volume.
+  const [recurrence, setRecurrence] = useState('none'); // 'none' | 'weekly' | 'biweekly' | 'monthly'
+  const [recurrenceEndMode, setRecurrenceEndMode] = useState('ongoing'); // 'ongoing' | 'until'
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState('');
 
   const minParticipants = Math.max(2, initial?.participants?.length || 2);
   const ageRangeValid = Number(ageMin) >= 16 && Number(ageMax) >= Number(ageMin);
@@ -5592,6 +6082,49 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
           )}
         </div>
 
+        {!isEditing && (
+          <div className="field">
+            <FieldLabel icon={Radio}>{t('create.repeatLabel')}</FieldLabel>
+            <select value={recurrence} onChange={(e) => setRecurrence(e.target.value)}>
+              <option value="none">{t('create.repeatNone')}</option>
+              <option value="weekly">{t('create.repeatWeekly')}</option>
+              <option value="biweekly">{t('create.repeatBiweekly')}</option>
+              <option value="monthly">{t('create.repeatMonthly')}</option>
+            </select>
+            {recurrence !== 'none' && (
+              <>
+                <div className="gender-options" style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className={`gender-btn ${recurrenceEndMode === 'ongoing' ? 'active' : ''}`}
+                    onClick={() => setRecurrenceEndMode('ongoing')}
+                  >
+                    {t('create.repeatOngoing')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`gender-btn ${recurrenceEndMode === 'until' ? 'active' : ''}`}
+                    onClick={() => setRecurrenceEndMode('until')}
+                  >
+                    {t('create.repeatUntilDate')}
+                  </button>
+                </div>
+                {recurrenceEndMode === 'until' && (
+                  <input
+                    type="date"
+                    value={recurrenceEndDate}
+                    onChange={(e) => setRecurrenceEndDate(e.target.value)}
+                    style={{ marginTop: 8 }}
+                  />
+                )}
+                <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, display: 'block' }}>
+                  {t('create.repeatHint', { cap: SERIES_OCCURRENCE_CAP })}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="field">
           <FieldLabel icon={Users}>{t('create.spotsLabel')}</FieldLabel>
           <input
@@ -5621,7 +6154,11 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
         <button
           className="modal-submit"
           disabled={!canSubmit || saving}
-          onClick={() => onSubmit({ title, activity, zone, location, datetime, maxParticipants, note, useLocation, audience, ageMin, ageMax })}
+          onClick={() => onSubmit({
+            title, activity, zone, location, datetime, maxParticipants, note, useLocation, audience, ageMin, ageMax,
+            recurrence: isEditing ? 'none' : recurrence,
+            recurrenceEndDate: recurrenceEndMode === 'until' ? recurrenceEndDate : '',
+          })}
         >
           {saving ? t('create.saving') : isEditing ? t('create.saveEdit') : t('create.submit')}
         </button>
