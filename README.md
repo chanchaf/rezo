@@ -121,11 +121,28 @@ mais à remplacer par votre propre projet dès que vous continuez ce travail.
 Avant de pouvoir créer/rejoindre une rencontre, discuter, inviter ou noter,
 l'utilisateur doit :
 
-1. **Créer un compte** (e-mail + mot de passe) ou se connecter à un compte
-   existant. Les comptes sont stockés dans le registre partagé `accounts`
-   (`window.storage`, `shared: true`) ; le mot de passe n'est jamais stocké en
-   clair — il est haché côté client via `crypto.subtle.digest('SHA-256', …)`
-   avant d'être enregistré (voir `hashPassword` dans `App.jsx`).
+1. **S'authentifier**, avec plusieurs portes d'entrée (écran en deux temps,
+   façon Glovo) :
+   - **Téléphone** (méthode principale) : préfixe pays (drapeau, présélectionné
+     via géolocalisation IP) + numéro, puis code reçu par SMS ou WhatsApp.
+     Réutilise le flux de vérification déjà en place pour le badge "Vérifié"
+     (voir plus bas) — le numéro complet sert lui-même d'identifiant de
+     compte. ⚠️ Aucun fournisseur SMS/WhatsApp réel n'est branché : le code
+     est affiché directement à l'écran ("code de démonstration"), comme pour
+     la vérification de téléphone dans "Modifier le profil".
+   - **E-mail + mot de passe** : entièrement réel dans les limites d'un
+     prototype — mot de passe haché côté client via
+     `crypto.subtle.digest('SHA-256', …)` avant stockage dans le registre
+     partagé `accounts` (`window.storage`, `shared: true`) (voir
+     `hashPassword` dans `App.jsx`).
+   - **Google / Facebook** : boutons présents (façon Glovo) mais non
+     connectés — nécessiteraient de vraies applications OAuth (client ID
+     Google, App ID + secret Facebook) qu'on ne peut pas improviser dans ce
+     projet. Au clic, un message clair l'indique plutôt que de simuler une
+     fausse connexion (voir `handleOAuthStub`). Idem pour "Mot de passe
+     oublié ?" et les liens légaux (reCAPTCHA, politique de confidentialité,
+     conditions d'utilisation) : aucune vraie page/flux derrière pour
+     l'instant.
 2. **Remplir son profil** : prénom, nom, sexe, pays (présélectionné via
    géolocalisation IP, repli sur le Maroc), ville, activités préférées, photo
    optionnelle. Cette étape est obligatoire et s'enchaîne automatiquement

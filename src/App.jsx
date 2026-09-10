@@ -170,6 +170,19 @@ const CITIES_BY_COUNTRY = {
   Autre: [],
 };
 
+// Préfixes téléphoniques pour l'écran d'authentification par numéro — même couverture de pays que
+// COUNTRIES/CITIES_BY_COUNTRY, avec le drapeau pour un menu déroulant reconnaissable au premier coup d'œil.
+const DIAL_CODES = [
+  { country: 'Maroc', flag: '🇲🇦', code: '+212' },
+  { country: 'France', flag: '🇫🇷', code: '+33' },
+  { country: 'Espagne', flag: '🇪🇸', code: '+34' },
+  { country: 'Belgique', flag: '🇧🇪', code: '+32' },
+  { country: 'Algérie', flag: '🇩🇿', code: '+213' },
+  { country: 'Tunisie', flag: '🇹🇳', code: '+216' },
+  { country: 'Canada', flag: '🇨🇦', code: '+1' },
+  { country: 'Suisse', flag: '🇨🇭', code: '+41' },
+];
+
 // Devine le pays via géolocalisation IP (best effort, pas de clé requise) pour pré-sélectionner le
 // champ Pays à l'inscription ; le Maroc reste le repli par défaut si ça échoue ou prend trop de temps.
 // ipapi.co renvoie le nom du pays en anglais ; la liste COUNTRIES est en français (cohérente avec
@@ -419,6 +432,29 @@ function fileToCoverDataUrl(file) {
   });
 }
 
+// Logos officiels (multicolore Google, bleu Facebook) pour les boutons "Continuer avec…" de
+// l'écran d'authentification — aucune icône de marque n'existe dans lucide-react.
+function GoogleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" />
+      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" />
+      <path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.038l3.007-2.332z" />
+      <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z" />
+    </svg>
+  );
+}
+function FacebookIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#1877F2"
+        d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"
+      />
+    </svg>
+  );
+}
+
 // Avatar réutilisable : photo si disponible dans le registre partagé, sinon initiale colorée.
 function Avatar({ name, avatarUrl, size = 22 }) {
   const initial = (name || '?').trim().charAt(0).toUpperCase();
@@ -523,13 +559,22 @@ export default function RezoApp() {
   const [userPhoneVerified, setUserPhoneVerified] = useState(false);
   const [userEmail, setUserEmail] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('signup'); // 'signup' | 'login'
+  // 'choose' (téléphone + portes d'entrée) -> 'phone-code' (OTP) ou 'email' (formulaire e-mail).
+  const [authScreen, setAuthScreen] = useState('choose');
+  const [authMode, setAuthMode] = useState('signup'); // 'signup' | 'login' — pour l'écran e-mail
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authConfirm, setAuthConfirm] = useState('');
   const [authShowPassword, setAuthShowPassword] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authDialCode, setAuthDialCode] = useState('+212');
+  const [authDialCountry, setAuthDialCountry] = useState('Maroc');
+  const [authPhoneNumber, setAuthPhoneNumber] = useState('');
+  const [authPhoneChannel, setAuthPhoneChannel] = useState('sms'); // 'sms' | 'whatsapp'
+  const [authPhoneCode, setAuthPhoneCode] = useState('');
+  const [authPhoneDevCode, setAuthPhoneDevCode] = useState(null);
+  const [authPhoneBusy, setAuthPhoneBusy] = useState(false);
   const [profilesMap, setProfilesMap] = useState({});
   const [verifiedMap, setVerifiedMap] = useState({});
   const [phoneDraft, setPhoneDraft] = useState('');
@@ -1162,13 +1207,25 @@ export default function RezoApp() {
     }
     setPendingAction(() => action);
     if (!userEmail) {
+      setAuthScreen('choose');
       setAuthMode('signup');
       setAuthEmail('');
       setAuthPassword('');
       setAuthConfirm('');
       setAuthShowPassword(false);
       setAuthError(null);
+      setAuthPhoneNumber('');
+      setAuthPhoneCode('');
+      setAuthPhoneDevCode(null);
       setShowAuthModal(true);
+      // Pré-sélection best effort du préfixe pays (même géoloc IP que le profil).
+      guessCountryFromIP().then((guessed) => {
+        const match = DIAL_CODES.find((d) => d.country === guessed);
+        if (match) {
+          setAuthDialCountry(match.country);
+          setAuthDialCode(match.code);
+        }
+      });
       return;
     }
     setNameDraft(userName || '');
@@ -1323,6 +1380,121 @@ export default function RezoApp() {
     } finally {
       setAuthSubmitting(false);
     }
+  };
+
+  // Authentification par numéro de téléphone (méthode principale) : réutilise le flux de
+  // vérification déjà en place pour le badge "Vérifié" (voir lib/verify.js), avec le numéro
+  // complet lui-même comme identifiant de compte — même limitation assumée : pas de vrai
+  // fournisseur SMS/WhatsApp branché, le code est donc affiché à l'écran ("devCode").
+  const requestPhoneAuthCode = async (channel) => {
+    const digits = authPhoneNumber.replace(/\s+/g, '');
+    if (!digits) {
+      setAuthError('Renseigne ton numéro de téléphone.');
+      return;
+    }
+    const fullPhone = `${authDialCode}${digits}`;
+    setAuthPhoneChannel(channel);
+    setAuthPhoneBusy(true);
+    setAuthError(null);
+    try {
+      const data = await requestPhoneCode(fullPhone, fullPhone);
+      setAuthPhoneDevCode(data.devCode || null);
+      setAuthPhoneCode('');
+      setAuthScreen('phone-code');
+    } catch (err) {
+      setAuthError(isNetworkError(err) ? SERVER_UNREACHABLE_MESSAGE : err.message || "Impossible d'envoyer le code.");
+    } finally {
+      setAuthPhoneBusy(false);
+    }
+  };
+
+  const confirmPhoneAuthCode = async () => {
+    if (!authPhoneCode.trim()) {
+      setAuthError('Renseigne le code reçu.');
+      return;
+    }
+    const digits = authPhoneNumber.replace(/\s+/g, '');
+    const fullPhone = `${authDialCode}${digits}`;
+    setAuthPhoneBusy(true);
+    setAuthError(null);
+    try {
+      await confirmPhoneCode(fullPhone, fullPhone, authPhoneCode.trim());
+      // Le serveur vient de créer/mettre à jour accounts[fullPhone] = {..., phone, phoneVerified: true}
+      // (voir server/index.js /api/verify/confirm) — on recharge pour savoir si le profil social
+      // (nom, activités...) existe déjà (retour) ou reste à compléter (première connexion).
+      const accounts = await loadAccounts();
+      const account = accounts[fullPhone] || {};
+      const name = account.name || '';
+      const lastName = account.lastName || '';
+      const country = account.country || 'Maroc';
+      const city = account.city || '';
+      const showLastName = !!account.showLastNamePublicly;
+      const showCity = !!account.showCityPublicly;
+      const cover = account.cover || null;
+      const bio = account.bio || '';
+      const gender = account.gender || '';
+      const preferences = account.preferences || [];
+      const avatar = account.avatar || null;
+      await window.storage.set('rezo-email', fullPhone, false);
+      await window.storage.set('rezo-phone', fullPhone, false);
+      await window.storage.set('rezo-phone-verified', 'true', false);
+      if (name) await window.storage.set('rezo-username', name, false);
+      if (lastName) await window.storage.set('rezo-lastname', lastName, false);
+      await window.storage.set('rezo-country', country, false);
+      if (city) await window.storage.set('rezo-city', city, false);
+      await window.storage.set('rezo-show-lastname', showLastName ? 'true' : 'false', false);
+      await window.storage.set('rezo-show-city', showCity ? 'true' : 'false', false);
+      if (cover) await window.storage.set('rezo-cover', cover, false);
+      if (bio) await window.storage.set('rezo-bio', bio, false);
+      if (gender) await window.storage.set('rezo-gender', gender, false);
+      if (preferences.length) await window.storage.set('rezo-preferences', JSON.stringify(preferences), false);
+      if (avatar) await window.storage.set('rezo-avatar', avatar, false);
+
+      setUserEmail(fullPhone);
+      setUserPhone(fullPhone);
+      setUserPhoneVerified(true);
+      setUserName(name || null);
+      setUserLastName(lastName || null);
+      setUserCountry(country);
+      setUserCity(city || null);
+      setUserShowLastName(showLastName);
+      setUserShowCity(showCity);
+      setUserCover(cover);
+      setUserBio(bio);
+      setUserGender(gender || null);
+      setUserPreferences(preferences);
+      setUserAvatar(avatar);
+
+      setShowAuthModal(false);
+      setNameDraft(name);
+      setLastNameDraft(lastName);
+      setCountryDraft(country);
+      setCityDraft(city);
+      setShowLastNameDraft(showLastName);
+      setGenderDraft(gender);
+      setPreferencesDraft(preferences);
+      setAvatarDraft(null);
+      setCoverDraft(null);
+      setBioDraft(bio);
+      setPhoneDraft(fullPhone);
+      setPhoneVerifiedDraft(true);
+      resetPhoneVerifyUi();
+      setShowNameModal(true);
+    } catch (err) {
+      setAuthError(isNetworkError(err) ? SERVER_UNREACHABLE_MESSAGE : err.message || 'Code incorrect.');
+    } finally {
+      setAuthPhoneBusy(false);
+    }
+  };
+
+  // Google/Facebook nécessitent de vraies applications OAuth (client ID, App ID Facebook) qu'on ne
+  // peut pas improviser ici : plutôt que de simuler une fausse connexion, on l'annonce clairement.
+  const handleOAuthStub = (provider) => {
+    showToast(`Connexion avec ${provider} pas encore disponible dans ce prototype — utilise le téléphone ou l'e-mail.`);
+  };
+
+  const showLegalPlaceholder = (label) => {
+    showToast(`${label} : à rédiger avant une mise en production réelle.`);
   };
 
   const logout = async () => {
@@ -3407,6 +3579,59 @@ export default function RezoApp() {
         .auth-logout-btn { color: var(--muted); margin-top: 8px; }
         .auth-logout-btn:hover { color: var(--amber); }
 
+        .auth-back-link {
+          display: flex; align-items: center; gap: 3px; background: none; border: none;
+          color: var(--muted); font-size: 12.5px; cursor: pointer; padding: 0; margin-bottom: 10px;
+          font-family: 'Inter', sans-serif;
+        }
+        .auth-back-link:hover { color: var(--text); }
+        .phone-dial-row { display: flex; gap: 8px; }
+        .dial-code-select {
+          flex: 0 0 108px; background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+          padding: 9px 8px; color: var(--text); font-size: 13.5px; font-family: 'Inter', sans-serif;
+          outline: none;
+        }
+        .dial-code-select:focus { border-color: var(--live); }
+        .phone-dial-row input { flex: 1; min-width: 0; }
+        .auth-legal-text {
+          font-size: 11px; color: var(--muted); line-height: 1.5; margin: 4px 0 14px;
+        }
+        .auth-legal-link {
+          background: none; border: none; padding: 0; color: var(--live); font-size: inherit;
+          cursor: pointer; text-decoration: underline; font-family: inherit;
+        }
+        .auth-forgot-link {
+          display: block; width: 100%; text-align: right; background: none; border: none;
+          color: var(--live); font-size: 12px; cursor: pointer; margin: -6px 0 10px;
+          font-family: 'Inter', sans-serif;
+        }
+        .phone-channel-btn {
+          width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+          background: var(--ink); border: 1px solid var(--border); color: var(--text);
+          border-radius: 9px; padding: 11px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+          margin-top: 8px; font-family: 'Inter', sans-serif;
+        }
+        .phone-channel-btn:hover:not(:disabled) { border-color: var(--border-strong); }
+        .phone-channel-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .phone-channel-btn.whatsapp {
+          background: #25D366; border-color: #25D366; color: #fff; margin-top: 4px;
+        }
+        .phone-channel-btn.whatsapp:hover:not(:disabled) { background: #20bd5a; }
+        .auth-separator {
+          display: flex; align-items: center; gap: 10px; margin: 16px 0;
+          color: var(--muted); font-size: 11.5px;
+        }
+        .auth-separator::before, .auth-separator::after {
+          content: ''; flex: 1; height: 1px; background: var(--border);
+        }
+        .auth-oauth-btn {
+          width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+          background: var(--card); border: 1px solid var(--border); color: var(--text);
+          border-radius: 9px; padding: 11px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+          margin-top: 8px; font-family: 'Inter', sans-serif;
+        }
+        .auth-oauth-btn:hover { border-color: var(--border-strong); background: var(--card-hover); }
+
         .invite-preview {
           background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
           padding: 10px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.4;
@@ -3966,108 +4191,281 @@ export default function RezoApp() {
       {showAuthModal && (
         <div className="modal-overlay">
           <div className="modal">
-            <div className="modal-header">
-              <div className="modal-title">
-                <Lock size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
-                {authMode === 'signup' ? 'Créer un compte' : 'Se connecter'}
-              </div>
-              <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
-            </div>
+            {authScreen === 'choose' && (
+              <>
+                <div className="modal-header">
+                  <div className="modal-title">
+                    <Lock size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
+                    Connexion
+                  </div>
+                  <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
+                </div>
 
-            <div className="auth-intro">
-              {authMode === 'signup'
-                ? 'Crée ton compte REZO pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.'
-                : 'Connecte-toi avec ton e-mail et ton mot de passe pour continuer.'}
-            </div>
+                <div className="auth-intro">
+                  Connecte-toi pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.
+                </div>
 
-            <div className="field">
-              <label>Adresse e-mail</label>
-              <div className="input-with-icon">
-                <Mail size={14} color="var(--muted)" />
-                <input
-                  type="email"
-                  autoFocus
-                  autoComplete="email"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  placeholder="toi@exemple.com"
-                  onKeyDown={(e) => e.key === 'Enter' && (authMode === 'signup' ? submitSignup() : submitLogin())}
-                />
-              </div>
-            </div>
+                {authError && <div className="auth-error" role="alert">{authError}</div>}
 
-            <div className="field">
-              <label>Mot de passe</label>
-              <div className="input-with-icon">
-                <Lock size={14} color="var(--muted)" />
-                <input
-                  type={authShowPassword ? 'text' : 'password'}
-                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="Au moins 6 caractères"
-                  onKeyDown={(e) => e.key === 'Enter' && authMode === 'login' && submitLogin()}
-                />
+                <div className="field">
+                  <label>Numéro de téléphone</label>
+                  <div className="phone-dial-row">
+                    <select
+                      className="dial-code-select"
+                      value={authDialCode}
+                      onChange={(e) => {
+                        const match = DIAL_CODES.find((d) => d.code === e.target.value);
+                        setAuthDialCode(e.target.value);
+                        if (match) setAuthDialCountry(match.country);
+                      }}
+                    >
+                      {DIAL_CODES.map((d) => (
+                        <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="tel"
+                      value={authPhoneNumber}
+                      onChange={(e) => setAuthPhoneNumber(e.target.value)}
+                      placeholder="6 12 34 56 78"
+                      onKeyDown={(e) => e.key === 'Enter' && requestPhoneAuthCode('sms')}
+                    />
+                  </div>
+                </div>
+
+                <div className="auth-legal-text">
+                  Le site est protégé par reCAPTCHA et la{' '}
+                  <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder('Politique de confidentialité')}>
+                    politique de confidentialité
+                  </button>{' '}
+                  et les{' '}
+                  <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder("Conditions d'utilisation")}>
+                    conditions d'utilisation
+                  </button>{' '}
+                  s'appliquent.
+                </div>
+
                 <button
                   type="button"
-                  className="input-icon-btn"
-                  onClick={() => setAuthShowPassword((v) => !v)}
-                  aria-label={authShowPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                  className="phone-channel-btn whatsapp"
+                  disabled={authPhoneBusy}
+                  onClick={() => requestPhoneAuthCode('whatsapp')}
                 >
-                  {authShowPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {authPhoneBusy && authPhoneChannel === 'whatsapp' ? <Loader2 size={15} className="spin" /> : <MessageCircle size={15} />}
+                  Recevoir le code par WhatsApp
                 </button>
-              </div>
-            </div>
+                <button
+                  type="button"
+                  className="phone-channel-btn"
+                  disabled={authPhoneBusy}
+                  onClick={() => requestPhoneAuthCode('sms')}
+                >
+                  {authPhoneBusy && authPhoneChannel === 'sms' ? <Loader2 size={15} className="spin" /> : <Phone size={15} />}
+                  Recevoir le code par SMS
+                </button>
 
-            {authMode === 'signup' && (
-              <div className="field">
-                <label>Confirmer le mot de passe</label>
-                <div className={`input-with-icon ${authConfirm && authConfirm !== authPassword ? 'mismatch' : ''}`}>
-                  <Lock size={14} color="var(--muted)" />
+                <div className="auth-separator"><span>ou avec</span></div>
+
+                <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
+                  <GoogleIcon /> Continuer avec Google
+                </button>
+                <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Facebook')}>
+                  <FacebookIcon /> Continuer avec Facebook
+                </button>
+                <button
+                  type="button"
+                  className="auth-oauth-btn"
+                  onClick={() => { setAuthScreen('email'); setAuthMode('login'); setAuthError(null); }}
+                >
+                  <Mail size={18} color="var(--muted)" /> Continuer avec e-mail
+                </button>
+              </>
+            )}
+
+            {authScreen === 'phone-code' && (
+              <>
+                <div className="modal-header">
+                  <div className="modal-title">
+                    <Phone size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
+                    Vérifie ton numéro
+                  </div>
+                  <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
+                </div>
+
+                <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('choose'); setAuthError(null); }}>
+                  <ChevronRight size={13} style={{ transform: 'rotate(180deg)', verticalAlign: '-2px' }} /> Retour
+                </button>
+
+                <div className="auth-intro">
+                  Code envoyé par {authPhoneChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} au {authDialCode} {authPhoneNumber}.
+                </div>
+
+                {authPhoneDevCode && (
+                  <div className="verify-code-hint">
+                    Code de démonstration (aucun fournisseur SMS/WhatsApp réel branché) : <strong>{authPhoneDevCode}</strong>
+                  </div>
+                )}
+
+                {authError && <div className="auth-error" role="alert">{authError}</div>}
+
+                <div className="field">
+                  <label>Code reçu</label>
                   <input
-                    type={authShowPassword ? 'text' : 'password'}
-                    autoComplete="new-password"
-                    value={authConfirm}
-                    onChange={(e) => setAuthConfirm(e.target.value)}
-                    placeholder="Retape ton mot de passe"
-                    onKeyDown={(e) => e.key === 'Enter' && submitSignup()}
+                    autoFocus
+                    value={authPhoneCode}
+                    onChange={(e) => setAuthPhoneCode(e.target.value)}
+                    placeholder="Code à 6 chiffres"
+                    maxLength={6}
+                    onKeyDown={(e) => e.key === 'Enter' && confirmPhoneAuthCode()}
                   />
                 </div>
-                {authConfirm && authConfirm !== authPassword && (
-                  <span style={{ fontSize: 11, color: 'var(--amber)' }}>Les mots de passe ne correspondent pas.</span>
+
+                <button className="modal-submit" disabled={authPhoneBusy || !authPhoneCode.trim()} onClick={confirmPhoneAuthCode}>
+                  {authPhoneBusy ? 'Vérification…' : 'Vérifier'}
+                </button>
+
+                <button
+                  type="button"
+                  className="auth-switch-btn"
+                  disabled={authPhoneBusy}
+                  onClick={() => requestPhoneAuthCode(authPhoneChannel)}
+                >
+                  Renvoyer le code
+                </button>
+              </>
+            )}
+
+            {authScreen === 'email' && (
+              <>
+                <div className="modal-header">
+                  <div className="modal-title">
+                    <Mail size={15} style={{ verticalAlign: '-2px', marginRight: 7, color: 'var(--live)' }} />
+                    {authMode === 'signup' ? 'Créer un compte' : 'Connectez-vous avec votre adresse e-mail'}
+                  </div>
+                  <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
+                </div>
+
+                <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('choose'); setAuthError(null); }}>
+                  <ChevronRight size={13} style={{ transform: 'rotate(180deg)', verticalAlign: '-2px' }} /> Retour
+                </button>
+
+                {authMode === 'signup' && (
+                  <div className="auth-intro">
+                    Crée ton compte REZO pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.
+                  </div>
                 )}
-              </div>
+
+                <div className="field">
+                  <label>Adresse e-mail</label>
+                  <div className="input-with-icon">
+                    <Mail size={14} color="var(--muted)" />
+                    <input
+                      type="email"
+                      autoFocus
+                      autoComplete="email"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="toi@exemple.com"
+                      onKeyDown={(e) => e.key === 'Enter' && (authMode === 'signup' ? submitSignup() : submitLogin())}
+                    />
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label>Mot de passe</label>
+                  <div className="input-with-icon">
+                    <Lock size={14} color="var(--muted)" />
+                    <input
+                      type={authShowPassword ? 'text' : 'password'}
+                      autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="Au moins 6 caractères"
+                      onKeyDown={(e) => e.key === 'Enter' && authMode === 'login' && submitLogin()}
+                    />
+                    <button
+                      type="button"
+                      className="input-icon-btn"
+                      onClick={() => setAuthShowPassword((v) => !v)}
+                      aria-label={authShowPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                    >
+                      {authShowPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                </div>
+
+                {authMode === 'signup' && (
+                  <div className="field">
+                    <label>Confirmer le mot de passe</label>
+                    <div className={`input-with-icon ${authConfirm && authConfirm !== authPassword ? 'mismatch' : ''}`}>
+                      <Lock size={14} color="var(--muted)" />
+                      <input
+                        type={authShowPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={authConfirm}
+                        onChange={(e) => setAuthConfirm(e.target.value)}
+                        placeholder="Retape ton mot de passe"
+                        onKeyDown={(e) => e.key === 'Enter' && submitSignup()}
+                      />
+                    </div>
+                    {authConfirm && authConfirm !== authPassword && (
+                      <span style={{ fontSize: 11, color: 'var(--amber)' }}>Les mots de passe ne correspondent pas.</span>
+                    )}
+                  </div>
+                )}
+
+                {authMode === 'login' && (
+                  <button
+                    type="button"
+                    className="auth-forgot-link"
+                    onClick={() => showLegalPlaceholder('Réinitialisation du mot de passe')}
+                  >
+                    Mot de passe oublié ?
+                  </button>
+                )}
+
+                {authError && (
+                  <div className="auth-error" role="alert">
+                    {authError}
+                  </div>
+                )}
+
+                <button
+                  className="modal-submit"
+                  disabled={
+                    authSubmitting ||
+                    !authEmail.trim() ||
+                    !authPassword ||
+                    (authMode === 'signup' && !authConfirm)
+                  }
+                  onClick={authMode === 'signup' ? submitSignup : submitLogin}
+                >
+                  {authSubmitting ? 'Patiente…' : authMode === 'signup' ? 'Créer mon compte' : 'Connexion'}
+                </button>
+
+                <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
+                  <GoogleIcon /> Se connecter avec Google
+                </button>
+
+                <div className="auth-legal-text">
+                  En continuant, tu acceptes le traitement de tes données personnelles — voir notre{' '}
+                  <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder('Déclaration de confidentialité')}>
+                    déclaration de confidentialité
+                  </button>.
+                </div>
+
+                <button
+                  type="button"
+                  className="auth-switch-btn"
+                  onClick={() => {
+                    setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'));
+                    setAuthError(null);
+                  }}
+                >
+                  {authMode === 'signup' ? 'Déjà un compte ? Se connecter' : "Vous n'avez pas de compte ? Créez-en un"}
+                </button>
+              </>
             )}
-
-            {authError && (
-              <div className="auth-error" role="alert">
-                {authError}
-              </div>
-            )}
-
-            <button
-              className="modal-submit"
-              disabled={
-                authSubmitting ||
-                !authEmail.trim() ||
-                !authPassword ||
-                (authMode === 'signup' && !authConfirm)
-              }
-              onClick={authMode === 'signup' ? submitSignup : submitLogin}
-            >
-              {authSubmitting ? 'Patiente…' : authMode === 'signup' ? 'Créer mon compte' : 'Se connecter'}
-            </button>
-
-            <button
-              type="button"
-              className="auth-switch-btn"
-              onClick={() => {
-                setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'));
-                setAuthError(null);
-              }}
-            >
-              {authMode === 'signup' ? 'Déjà un compte ? Se connecter' : "Pas encore de compte ? S'inscrire"}
-            </button>
           </div>
         </div>
       )}
