@@ -213,6 +213,39 @@ langues : **Français** (référence), **Anglais**, **Arabe** (RTL).
   partagé. Dictionnaire dans `src/lib/i18n.js` (clé → FR/EN/AR) ;
   `translate()` retombe sur le français si une clé manque dans une langue.
 
+## Adresses géolocalisées (autocomplétion + tri par distance)
+
+À la création d'une rencontre, les champs **Zone géographique** et **Lieu
+précis** proposent une autocomplétion façon barre de recherche Google Maps :
+dès 3 caractères tapés, une liste de suggestions (icône pin + nom + ville)
+se met à jour au fil de la frappe, débounce 450 ms — voir `useGeoSuggest` et
+`toGeoSuggestion` dans `App.jsx`. Sélectionner une suggestion remplit le
+champ **et** capture ses coordonnées GPS exactes en arrière-plan, sans que
+l'organisateur ait besoin d'activer sa propre position ni d'être
+physiquement sur les lieux au moment de la création (utile pour planifier à
+l'avance un lieu où l'on ne se trouve pas encore).
+
+- **Service utilisé : Nominatim (OpenStreetMap)**, gratuit et sans clé API —
+  cohérent avec le choix déjà fait pour "Voir sur la carte" (lien Google
+  Maps sans clé). Alternative envisagée : Google Places Autocomplete, plus
+  riche mais nécessitant un compte Google Cloud avec facturation active ;
+  écarté pour rester sans configuration côté serveur. L'attribution "©
+  contributeurs OpenStreetMap" affichée sous la liste de suggestions est une
+  exigence de leur politique d'usage, à ne pas retirer.
+- **Priorité des coordonnées** à la création : lieu précis choisi via
+  autocomplétion (le plus fin) > zone choisie via autocomplétion > case
+  "épingler ma position actuelle" (dépend d'être sur place) > aucune,
+  laissant la rencontre en texte libre non géolocalisé comme avant.
+- **Tri par distance réelle** : une fois "📍 Activités proches de moi"
+  activé, chaque rencontre géolocalisée affiche sa distance réelle
+  (`formatDistance`, ex. "850 m" / "1.2 km") et le flux se trie par distance
+  croissante au sein de chaque groupe d'activité (`byDistanceThenDate`) — les
+  rencontres sans coordonnées précises restent visibles, triées après, par
+  ville puis date comme aujourd'hui. Ce n'est pas un mécanisme nouveau : il
+  existait déjà pour le lien "Voir sur la carte" et "Mon trajet" ; l'ajout
+  ici est la source de données (des coordonnées fiables dès la création) qui
+  lui manquait, pas le calcul de distance lui-même.
+
 ## Éviter la "ville fantôme" (flux vide au lancement)
 
 Un flux vide est le pire ennemi de la rétention sur ce type d'app. Trois

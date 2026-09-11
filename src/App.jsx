@@ -382,6 +382,76 @@ function formatDistance(km) {
   return `${km.toFixed(km < 10 ? 1 : 0)} km`;
 }
 
+// Transforme un résultat brut Nominatim (OpenStreetMap) en suggestion affichable : nom principal
+// (établissement/rue) + contexte secondaire (quartier, ville), avec les coordonnées exactes.
+function toGeoSuggestion(r) {
+  const addr = r.address || {};
+  const parts = (r.display_name || '').split(',').map((p) => p.trim()).filter(Boolean);
+  const primary = addr.amenity || addr.shop || addr.leisure || addr.tourism || addr.office || addr.building || addr.road || parts[0] || r.display_name;
+  const primaryLower = String(primary).toLowerCase();
+  const city = addr.city || addr.town || addr.village || addr.county || '';
+  const suburb = addr.suburb || addr.neighbourhood || '';
+  // Un résultat "quartier" a souvent le même texte en primary (dérivé de display_name) et en
+  // suburb — sans ce filtre, la suggestion afficherait "Maarif — Maarif, Casablanca" en double.
+  const structuredParts = [suburb, city].filter((p) => p && p.toLowerCase() !== primaryLower);
+  const secondaryParts = structuredParts.length
+    ? [...new Set(structuredParts)]
+    : parts.slice(1, 3).filter((p) => p.toLowerCase() !== primaryLower);
+  return {
+    id: r.place_id ?? `${r.lat}-${r.lon}`,
+    primary,
+    secondary: secondaryParts.join(', '),
+    lat: parseFloat(r.lat),
+    lng: parseFloat(r.lon),
+  };
+}
+
+// Autocomplétion d'adresse via Nominatim (OpenStreetMap) : gratuit, sans clé API — cohérent avec le
+// choix déjà fait pour "Voir sur la carte" (lien Google Maps sans clé). Débounce 450ms + annulation
+// de la requête précédente pour rester raisonnable vis-à-vis du service public (limite ~1 req/s,
+// voir la mention d'attribution affichée sous la liste de suggestions dans le JSX appelant).
+function useGeoSuggest(query, language) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const debounceRef = useRef(null);
+  const abortRef = useRef(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const trimmed = (query || '').trim();
+    if (trimmed.length < 3) {
+      setSuggestions([]);
+      setLoading(false);
+      return undefined;
+    }
+    debounceRef.current = setTimeout(() => {
+      if (abortRef.current) abortRef.current.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setLoading(true);
+      const params = new URLSearchParams({
+        format: 'jsonv2',
+        addressdetails: '1',
+        limit: '6',
+        'accept-language': language || 'fr',
+        q: trimmed,
+      });
+      fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, { signal: controller.signal })
+        .then((res) => res.json())
+        .then((data) => setSuggestions(Array.isArray(data) ? data.map(toGeoSuggestion) : []))
+        .catch((err) => {
+          if (err.name !== 'AbortError') setSuggestions([]);
+        })
+        .finally(() => setLoading(false));
+    }, 450);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, language]);
+
+  return { suggestions, loading };
+}
+
 // Libellé lisible pour la tranche d'âge ciblée par une rencontre.
 function formatAgeRange(min, max, t) {
   const lo = min || 18;
@@ -1982,6 +2052,12 @@ export default function RezoApp() {
       if (audience === 'hommes' && gender !== 'homme') audience = 'mixte';
       if (audience === 'femmes' && gender !== 'femme') audience = 'mixte';
 
+      // Priorité des coordonnées : le lieu précis choisi via autocomplétion (le plus fin), puis la
+      // zone choisie via autocomplétion, puis "épingler ma position actuelle" (dépend d'être sur
+      // place au moment de la création) — voir useGeoSuggest dans CreateModal.
+      const resolvedCoords =
+        form.locationCoords || form.zoneCoords || (form.useLocation && userCoords ? userCoords : null);
+
       if (editingMeetup) {
         const updated = meetups.map((m) =>
           m.id === editingMeetup.id
@@ -1997,7 +2073,7 @@ export default function RezoApp() {
                 audience,
                 ageMin: Number(form.ageMin) || 18,
                 ageMax: Number(form.ageMax) || 99,
-                coords: form.useLocation && userCoords ? userCoords : m.coords,
+                coords: resolvedCoords || m.coords,
               }
             : m
         );
@@ -2022,7 +2098,7 @@ export default function RezoApp() {
         ageMax: Number(form.ageMax) || 99,
         pendingRequests: [],
         createdAt: new Date().toISOString(),
-        coords: form.useLocation && userCoords ? userCoords : null,
+        coords: resolvedCoords,
       };
 
       // Récurrence : génère toutes les occurrences d'un coup (voir generateSeriesOccurrences),
@@ -3348,6 +3424,29 @@ export default function RezoApp() {
         .activity-suggest-icon {
           width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0;
           display: flex; align-items: center; justify-content: center;
+        }
+
+        .geo-suggest-wrap { position: relative; }
+        .geo-suggest-list {
+          position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 6;
+          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.14); overflow: hidden; max-height: 260px; overflow-y: auto;
+        }
+        .geo-suggest-item {
+          display: flex; align-items: flex-start; gap: 8px; width: 100%;
+          background: none; border: none; border-bottom: 1px solid var(--border);
+          text-align: start; cursor: pointer; padding: 9px 12px; font-family: 'Inter', sans-serif;
+        }
+        .geo-suggest-item:last-of-type { border-bottom: none; }
+        .geo-suggest-item:hover { background: var(--card-hover); }
+        .geo-suggest-pin { flex-shrink: 0; margin-top: 2px; color: var(--live); }
+        .geo-suggest-primary { display: block; font-size: 13px; color: var(--text); font-weight: 600; }
+        .geo-suggest-secondary { display: block; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+        .geo-suggest-loading { padding: 10px 12px; font-size: 12px; color: var(--muted); }
+        .geo-suggest-attribution { padding: 6px 12px; font-size: 10px; color: var(--muted); border-top: 1px solid var(--border); }
+        .geo-suggest-confirmed {
+          display: inline-flex; align-items: center; gap: 4px; margin-top: 4px;
+          font-size: 11px; color: var(--online); font-weight: 600;
         }
 
         .geo-btn {
@@ -4772,6 +4871,8 @@ export default function RezoApp() {
           t={t}
           aLabel={aLabel}
           audLabel={audLabel}
+          language={language}
+          dir={dir}
         />
       )}
 
@@ -6010,12 +6111,22 @@ export default function RezoApp() {
   );
 }
 
-function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initial, template, defaultZone, t, aLabel, audLabel }) {
+function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initial, template, defaultZone, t, aLabel, audLabel, language, dir }) {
   const isEditing = !!initial;
   const [title, setTitle] = useState(initial?.title || template?.title || '');
   const [activity, setActivity] = useState(initial?.activity || template?.activity || ACTIVITIES[0].id);
   const [zone, setZone] = useState(initial?.zone || defaultZone || '');
   const [location, setLocation] = useState(initial?.location || '');
+  // Coordonnées capturées via l'autocomplétion d'adresse (voir useGeoSuggest) : prioritaires sur la
+  // simple case à cocher "épingler ma position actuelle" car précises même si l'organisateur ne se
+  // trouve pas sur les lieux au moment de la création. Réinitialisées dès que le texte est modifié
+  // à la main (la coordonnée précédente ne correspond plus forcément à ce qui est tapé).
+  const [zoneCoords, setZoneCoords] = useState(null);
+  const [locationCoords, setLocationCoords] = useState(null);
+  const [zoneFocused, setZoneFocused] = useState(false);
+  const [locationFocused, setLocationFocused] = useState(false);
+  const zoneSuggest = useGeoSuggest(zoneFocused ? zone : '', language);
+  const locationSuggest = useGeoSuggest(locationFocused ? location : '', language);
   const [datetime, setDatetime] = useState(initial?.datetime || (template ? toDatetimeLocalValue(template.when()) : ''));
   const [maxParticipants, setMaxParticipants] = useState(initial?.maxParticipants || 8);
   const [note, setNote] = useState(initial?.note || template?.note || '');
@@ -6080,20 +6191,103 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
 
         <div className="field">
           <FieldLabel icon={MapPin}>{t('create.zoneLabel')}</FieldLabel>
-          <input value={zone} onChange={(e) => setZone(e.target.value)} placeholder="Ex: Maarif, Casablanca" />
+          <div className="geo-suggest-wrap">
+            <input
+              value={zone}
+              onChange={(e) => { setZone(e.target.value); setZoneCoords(null); }}
+              onFocus={() => setZoneFocused(true)}
+              onBlur={() => setTimeout(() => setZoneFocused(false), 150)}
+              placeholder="Ex: Maarif, Casablanca"
+            />
+            {zoneFocused && zone.trim().length >= 3 && (zoneSuggest.loading || zoneSuggest.suggestions.length > 0) && (
+              <div className="geo-suggest-list">
+                {zoneSuggest.loading && zoneSuggest.suggestions.length === 0 ? (
+                  <div className="geo-suggest-loading">{t('create.addressSearching')}</div>
+                ) : (
+                  <>
+                    {zoneSuggest.suggestions.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="geo-suggest-item"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setZone(s.secondary ? `${s.primary}, ${s.secondary}` : s.primary);
+                          setZoneCoords({ lat: s.lat, lng: s.lng });
+                          setZoneFocused(false);
+                        }}
+                      >
+                        <MapPin size={13} className="geo-suggest-pin" />
+                        <span>
+                          <span className="geo-suggest-primary">{s.primary}</span>
+                          {s.secondary && <span className="geo-suggest-secondary">{s.secondary}</span>}
+                        </span>
+                      </button>
+                    ))}
+                    <div className="geo-suggest-attribution">{t('create.geoAttribution')}</div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {zoneCoords && (
+            <span className="geo-suggest-confirmed">
+              <Check size={11} style={{ verticalAlign: '-1px' }} /> {t('create.geoCoordsCaptured')}
+            </span>
+          )}
         </div>
 
         <div className="field">
           <FieldLabel icon={Crosshair}>{t('create.locationLabel')}</FieldLabel>
-          <input
-            value={location}
-            maxLength={120}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="Ex: Terrain Al Amal, complexe sportif Anfa"
-          />
-          <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-            {t('create.locationHint')}
-          </span>
+          <div className="geo-suggest-wrap">
+            <input
+              value={location}
+              maxLength={120}
+              onChange={(e) => { setLocation(e.target.value); setLocationCoords(null); }}
+              onFocus={() => setLocationFocused(true)}
+              onBlur={() => setTimeout(() => setLocationFocused(false), 150)}
+              placeholder="Ex: Terrain Al Amal, complexe sportif Anfa"
+            />
+            {locationFocused && location.trim().length >= 3 && (locationSuggest.loading || locationSuggest.suggestions.length > 0) && (
+              <div className="geo-suggest-list">
+                {locationSuggest.loading && locationSuggest.suggestions.length === 0 ? (
+                  <div className="geo-suggest-loading">{t('create.addressSearching')}</div>
+                ) : (
+                  <>
+                    {locationSuggest.suggestions.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="geo-suggest-item"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setLocation(s.secondary ? `${s.primary}, ${s.secondary}` : s.primary);
+                          setLocationCoords({ lat: s.lat, lng: s.lng });
+                          setLocationFocused(false);
+                        }}
+                      >
+                        <MapPin size={13} className="geo-suggest-pin" />
+                        <span>
+                          <span className="geo-suggest-primary">{s.primary}</span>
+                          {s.secondary && <span className="geo-suggest-secondary">{s.secondary}</span>}
+                        </span>
+                      </button>
+                    ))}
+                    <div className="geo-suggest-attribution">{t('create.geoAttribution')}</div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {locationCoords ? (
+            <span className="geo-suggest-confirmed">
+              <Check size={11} style={{ verticalAlign: '-1px' }} /> {t('create.geoCoordsCaptured')}
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+              {t('create.locationHint')}
+            </span>
+          )}
         </div>
 
         <div className="field">
@@ -6245,6 +6439,7 @@ function CreateModal({ onClose, onSubmit, saving, userCoords, userGender, initia
             title, activity, zone, location, datetime, maxParticipants, note, useLocation, audience, ageMin, ageMax,
             recurrence: isEditing ? 'none' : recurrence,
             recurrenceEndDate: recurrenceEndMode === 'until' ? recurrenceEndDate : '',
+            zoneCoords, locationCoords,
           })}
         >
           {saving ? t('create.saving') : isEditing ? t('create.saveEdit') : t('create.submit')}
