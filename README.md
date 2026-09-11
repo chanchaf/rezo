@@ -50,8 +50,59 @@ npm run preview    # prévisualiser le build de production
 - `src/lib/push.js` / `public/sw.js` — abonnement et réception des
   notifications push côté client.
 - `src/lib/verify.js` — vérification de numéro de téléphone (badge
-  "Vérifié") côté client.
-- `src/main.jsx` / `src/index.css` / `index.html` — bootstrap standard Vite.
+  "Vérifié") côté client, réutilisé tel quel par la landing page web.
+- `src/Landing.jsx` / `src/WebAuth.jsx` / `src/lib/device.js` /
+  `src/lib/webAuth.js` — landing page web et son écran de connexion dédié,
+  totalement isolés de `App.jsx` (voir section dédiée ci-dessous).
+- `src/main.jsx` / `src/index.css` / `index.html` — bootstrap standard Vite,
+  et depuis peu le point d'entrée qui choisit entre l'app mobile et la
+  landing page web (voir section dédiée ci-dessous).
+
+## Landing page web (visiteurs desktop non connectés)
+
+`App.jsx` — le composant de l'app mobile — reste **strictement intact** :
+contrainte produit explicite, aucune ligne n'y a été touchée pour ajouter ce
+qui suit. Toute la logique d'aiguillage vit dans `src/main.jsx`, le seul
+point d'entrée modifié :
+
+- **Visiteur sur mobile** (détecté par user-agent, voir `src/lib/device.js`
+  — volontairement pas par largeur de fenêtre, pour qu'une fenêtre desktop
+  redimensionnée en étroit reste sur le web) **OU déjà connecté** (n'importe
+  quel appareil, via la même session `localStorage` que l'app lit
+  normalement) → l'app mobile existante, inchangée, y compris son cadre
+  "smartphone" en desktop.
+- **Visiteur desktop non connecté** → `src/Landing.jsx` (page marketing :
+  header, hero avec captures d'écran réelles de l'app — voir
+  `public/landing/*.png`, capturées via Playwright, pas le composant React
+  lui-même — comment ça marche, cas d'usage, confiance/sécurité, carrousel,
+  FAQ, footer), puis `src/WebAuth.jsx` si iel choisit de se connecter/s'inscrire.
+
+**Pourquoi `src/lib/webAuth.js` duplique une partie de `App.jsx` plutôt que
+de la réutiliser :** `hashPassword`, le registre `accounts`, et les clés
+localStorage écrites à la connexion existent déjà dans `App.jsx`, mais n'en
+sont pas exportés — et la contrainte "aucune modification à `App.jsx`"
+interdit d'ajouter ne serait-ce qu'un `export`. `webAuth.js` réimplémente
+donc cette petite partie (même algorithme de hash, même forme de compte)
+pour qu'un compte créé/connecté depuis le web soit repris correctement par
+`App.jsx` — le point de handoff est un simple `window.location.reload()`
+après avoir posé la session dans localStorage : App.jsx la lit à son
+montage exactement comme pour un retour de visite normal, sans aucun code
+partagé entre les deux. ⚠️ Les deux copies doivent rester équivalentes si la
+logique change d'un côté (voir le commentaire en tête de `webAuth.js`).
+
+Le cadre "smartphone" du desktop (`src/index.css`) ne devait plus s'appliquer
+qu'à l'app mobile, jamais à la landing — un sélecteur CSS seul ne pouvant pas
+cibler `#root` selon ce que contient son enfant, `main.jsx` pose une classe
+`rezo-mode-app` sur `<body>` pendant le rendu (pas un effet, pour éviter tout
+flash) plutôt que d'utiliser `:has()` (support navigateur plus incertain).
+
+Après connexion/inscription, un compte fraîchement créé depuis le web
+atterrit sur le flux normal de l'app plutôt que sur la modale "Ton profil"
+immédiatement (contrairement au flux mobile qui l'ouvre tout de suite) — dès
+qu'iel touche l'onglet Profil ou tente de créer/rejoindre une rencontre, la
+même modale de complétion de profil (100% inchangée) s'ouvre normalement.
+Léger compromis d'UX (un tap de plus) accepté en échange de l'isolation
+totale demandée.
 
 ## À propos du stockage des données
 

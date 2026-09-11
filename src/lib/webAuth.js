@@ -1,0 +1,137 @@
+/**
+ * Authentification pour la landing page web (voir Landing.jsx / WebAuth.jsx).
+ *
+ * ⚠️ Duplique volontairement une petite partie de la logique déjà présente dans App.jsx
+ * (hashPassword, le registre `accounts`, les clés localStorage écrites à la connexion) au lieu de
+ * l'importer depuis App.jsx. Contrainte explicite du produit : l'app mobile existante (App.jsx) ne
+ * doit subir AUCUNE modification, pas même l'ajout d'un `export` sur une fonction déjà présente —
+ * donc pas de source commune possible sans y toucher. Les deux copies doivent rester équivalentes
+ * (même algorithme de hash, même forme de compte, mêmes clés) pour qu'un compte créé ou connecté
+ * ici soit repris correctement par App.jsx au rechargement (voir handoff() ci-dessous).
+ */
+import { db } from './firebase.js';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+
+const ACCOUNTS_KEY = 'accounts';
+
+export const DIAL_CODES = [
+  { country: 'Maroc', flag: '🇲🇦', code: '+212' },
+  { country: 'France', flag: '🇫🇷', code: '+33' },
+  { country: 'Espagne', flag: '🇪🇸', code: '+34' },
+  { country: 'Belgique', flag: '🇧🇪', code: '+32' },
+  { country: 'Algérie', flag: '🇩🇿', code: '+213' },
+  { country: 'Tunisie', flag: '🇹🇳', code: '+216' },
+  { country: 'Canada', flag: '🇨🇦', code: '+1' },
+  { country: 'Suisse', flag: '🇨🇭', code: '+41' },
+];
+
+export function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim());
+}
+
+export async function hashPassword(password) {
+  const bytes = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export async function loadAccounts() {
+  try {
+    const snap = await getDoc(doc(db, 'kv', ACCOUNTS_KEY));
+    if (!snap.exists()) return {};
+    return JSON.parse(snap.data().value || '{}');
+  } catch (err) {
+    return {};
+  }
+}
+
+export async function saveAccounts(accounts) {
+  await setDoc(doc(db, 'kv', ACCOUNTS_KEY), { value: JSON.stringify(accounts) });
+}
+
+// Écrit dans localStorage exactement les mêmes clés que App.jsx lit à son montage (voir son effet
+// `window.storage.get('rezo-email'|'rezo-username'|...)`), pour qu'un rechargement de page bascule
+// naturellement dans l'app déjà connectée — sans dupliquer l'UI ni l'état de App.jsx lui-même.
+const NAMESPACE = 'rezo:data';
+
+function readPersonal() {
+  try {
+    const raw = localStorage.getItem(NAMESPACE);
+    return raw ? JSON.parse(raw).personal || {} : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function writePersonal(personal) {
+  localStorage.setItem(NAMESPACE, JSON.stringify({ personal }));
+}
+
+export function getStoredSessionEmail() {
+  return readPersonal()['rezo-email'] || null;
+}
+
+// Même clé/format que App.jsx (`rezo-language`, localStorage non partagé) : un choix de langue
+// fait sur la landing page avant connexion doit se retrouver dans l'app juste après le handoff.
+export function getStoredLanguage() {
+  return readPersonal()['rezo-language'] || null;
+}
+
+export function setStoredLanguage(code) {
+  const personal = readPersonal();
+  personal['rezo-language'] = code;
+  writePersonal(personal);
+}
+
+export function applySessionToLocalStorage(identifier, account, extra = {}) {
+  const personal = readPersonal();
+  personal['rezo-email'] = identifier;
+  if (extra.phone) personal['rezo-phone'] = extra.phone;
+  if (extra.phoneVerified) personal['rezo-phone-verified'] = 'true';
+  if (account?.name) personal['rezo-username'] = account.name;
+  if (account?.lastName) personal['rezo-lastname'] = account.lastName;
+  personal['rezo-country'] = account?.country || 'Maroc';
+  if (account?.city) personal['rezo-city'] = account.city;
+  personal['rezo-show-lastname'] = account?.showLastNamePublicly ? 'true' : 'false';
+  personal['rezo-show-city'] = account?.showCityPublicly ? 'true' : 'false';
+  if (account?.cover) personal['rezo-cover'] = account.cover;
+  if (account?.bio) personal['rezo-bio'] = account.bio;
+  if (account?.gender) personal['rezo-gender'] = account.gender;
+  if (account?.preferences?.length) personal['rezo-preferences'] = JSON.stringify(account.preferences);
+  if (account?.avatar) personal['rezo-avatar'] = account.avatar;
+  if (account?.language) personal['rezo-language'] = account.language;
+  writePersonal(personal);
+}
+
+export async function createEmailAccount(email, password, language) {
+  const trimmed = email.trim().toLowerCase();
+  if (!isValidEmail(trimmed)) throw new Error('Adresse e-mail invalide.');
+  if (password.length < 6) throw new Error('Le mot de passe doit contenir au moins 6 caractères.');
+  const accounts = await loadAccounts();
+  if (accounts[trimmed]) throw new Error('Un compte existe déjà avec cette adresse.');
+  const passwordHash = await hashPassword(password);
+  accounts[trimmed] = { passwordHash, createdAt: new Date().toISOString(), language };
+  await saveAccounts(accounts);
+  applySessionToLocalStorage(trimmed, accounts[trimmed]);
+  return trimmed;
+}
+
+export async function loginEmailAccount(email, password) {
+  const trimmed = email.trim().toLowerCase();
+  const accounts = await loadAccounts();
+  const account = accounts[trimmed];
+  if (!account) throw new Error('Aucun compte avec cette adresse.');
+  const passwordHash = await hashPassword(password);
+  if (passwordHash !== account.passwordHash) throw new Error('Mot de passe incorrect.');
+  applySessionToLocalStorage(trimmed, account);
+  return trimmed;
+}
+
+export async function completePhoneLogin(fullPhone) {
+  const accounts = await loadAccounts();
+  const account = accounts[fullPhone] || {};
+  applySessionToLocalStorage(fullPhone, account, { phone: fullPhone, phoneVerified: true });
+  return fullPhone;
+}

@@ -21,22 +21,29 @@ body {
   min-height: 100dvh;
 }
 
-/* Mobile réel : l'app occupe tout l'écran, aucune marge ni coin arrondi. */
-#root > div {
+/* Mobile réel : l'app occupe tout l'écran, aucune marge ni coin arrondi.
+   Scopé à .rezo-app (pas juste "#root > div") : #root peut aussi contenir la landing page web
+   (visiteur desktop non connecté, voir main.jsx/Landing.jsx), qui doit rester plein écran, sans le
+   cadre "smartphone" ci-dessous — cette règle ne doit rien changer à l'app mobile elle-même. */
+#root > .rezo-app {
   width: 100%;
   height: 100dvh;
 }
 
-/* Écrans larges (desktop) : aperçu façon smartphone, cadre + ombre. */
+/* Écrans larges (desktop) : aperçu façon smartphone, cadre + ombre — uniquement pour l'app mobile
+   existante. La classe "rezo-mode-app" est posée sur <body> par main.jsx UNIQUEMENT quand .rezo-app
+   est monté (jamais pour la landing/web-auth) — voir main.jsx. Un simple sélecteur CSS ne peut pas
+   cibler #root selon ce que contient son enfant, d'où ce petit relais JS plutôt que ":has()" (support
+   navigateur plus large). N'affecte en rien l'app mobile elle-même : mêmes styles qu'avant. */
 @media (min-width: 640px) {
-  body {
+  body.rezo-mode-app {
     background: radial-gradient(circle at 50% 0%, #1a1d29 0%, #0B0C10 62%);
   }
-  #root {
+  body.rezo-mode-app #root {
     align-items: center;
     padding: 32px 12px;
   }
-  #root > div {
+  #root > .rezo-app {
     width: 100%;
     max-width: 420px;
     height: min(880px, calc(100dvh - 64px));
