@@ -361,6 +361,7 @@ const fr = {
   'toast.unfollowed': 'Tu ne suis plus {name}.',
   'toast.newMeetupFromFollowed': '{name} vient de créer : {title}',
   'home.fromFollowed': 'De tes abonnements',
+  'home.recommendedForYou': 'Recommandé pour toi',
   'profile.backToOwn': 'Retour à mon profil',
 
   'circle.title': 'Mon cercle',
@@ -747,6 +748,7 @@ const en = {
   'toast.unfollowed': 'You unfollowed {name}.',
   'toast.newMeetupFromFollowed': '{name} just created: {title}',
   'home.fromFollowed': 'From your follows',
+  'home.recommendedForYou': 'Recommended for you',
   'profile.backToOwn': 'Back to my profile',
 
   'circle.title': 'My circle',
@@ -1133,6 +1135,7 @@ const ar = {
   'toast.unfollowed': 'لم تعد تتابع {name}.',
   'toast.newMeetupFromFollowed': 'أنشأ {name} للتو: {title}',
   'home.fromFollowed': 'من متابعاتك',
+  'home.recommendedForYou': 'موصى به لك',
   'profile.backToOwn': 'العودة إلى ملفي الشخصي',
 
   'circle.title': 'دائرتي',

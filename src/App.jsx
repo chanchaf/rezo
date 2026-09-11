@@ -4502,7 +4502,7 @@ export default function RezoApp() {
                   <span className="swatch" style={{ background: color }}></span>
                   <div className="recommended-card-title">{m.title}</div>
                   <div className="recommended-card-meta">
-                    {m.zone || 'Zone non précisée'} · {formatWhen(m.datetime, language)}
+                    {m.zone || t('card.zoneUnspecified')} · {formatWhen(m.datetime, language)}
                   </div>
                 </button>
               );
@@ -4515,7 +4515,7 @@ export default function RezoApp() {
         <div className="recommended-wrap">
           <div className="recommended-title">
             <Heart size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 5 }} fill="var(--amber)" color="var(--amber)" />
-            Recommandé pour toi
+            {t('home.recommendedForYou')}
           </div>
           <div className="recommended-scroll">
             {recommended.map((m) => {
@@ -4529,7 +4529,7 @@ export default function RezoApp() {
                   <span className="swatch" style={{ background: color }}></span>
                   <div className="recommended-card-title">{m.title}</div>
                   <div className="recommended-card-meta">
-                    {m.zone || 'Zone non précisée'} · {formatWhen(m.datetime)}
+                    {m.zone || t('card.zoneUnspecified')} · {formatWhen(m.datetime, language)}
                   </div>
                 </button>
               );
