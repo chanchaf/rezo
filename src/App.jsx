@@ -710,6 +710,7 @@ export default function RezoApp() {
   const watchIdRef = useRef(null);
   const arrivalsSeenRef = useRef({});
   const arrivalsInitRef = useRef(false);
+  const extendingSeriesRef = useRef(new Set());
   const [editingMeetup, setEditingMeetup] = useState(null);
   const [templateDraft, setTemplateDraft] = useState(null);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -1215,6 +1216,81 @@ export default function RezoApp() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userName, meetups.length]);
+
+  // Prolongation automatique des séries récurrentes "jusqu'à nouvel ordre" (ou pas encore arrivées à
+  // leur date de fin) : la génération initiale est plafonnée à SERIES_OCCURRENCE_CAP occurrences
+  // (voir handleCreate/generateSeriesOccurrences), donc sans ce relais une série hebdomadaire
+  // s'arrêterait silencieusement après ~3 mois. Déclenché côté client de l'organisateur uniquement
+  // (comme la clôture à 30 min ci-dessous) — pas de vrai cron serveur dans ce prototype.
+  useEffect(() => {
+    if (!userName) return;
+    const bySeriesId = new Map();
+    meetups.forEach((m) => {
+      if (!m.seriesId || m.host !== userName) return;
+      if (!bySeriesId.has(m.seriesId)) bySeriesId.set(m.seriesId, []);
+      bySeriesId.get(m.seriesId).push(m);
+    });
+    bySeriesId.forEach((occurrences, seriesId) => {
+      if (extendingSeriesRef.current.has(seriesId)) return;
+      if (occurrences.some((m) => m.seriesStopped)) return;
+      const upcoming = occurrences.filter((m) => !m.closed && !isPast(m));
+      if (upcoming.length > 2) return; // encore assez d'occurrences à venir, rien à faire pour l'instant
+      const last = occurrences.reduce((a, b) => (new Date(a.datetime) > new Date(b.datetime) ? a : b));
+      const frequency = last.seriesFrequency;
+      if (frequency !== 'weekly' && frequency !== 'biweekly' && frequency !== 'monthly') return;
+      const endDate = last.seriesEndDate || null;
+      if (endDate && new Date(last.datetime).getTime() >= new Date(`${endDate}T23:59`).getTime()) return; // fin naturelle déjà atteinte
+      extendingSeriesRef.current.add(seriesId);
+      (async () => {
+        try {
+          const startFrom = new Date(last.datetime);
+          if (frequency === 'monthly') startFrom.setMonth(startFrom.getMonth() + 1);
+          else startFrom.setDate(startFrom.getDate() + (SERIES_STEP_DAYS[frequency] || 7));
+          const newDates = generateSeriesOccurrences(toDatetimeLocalValue(startFrom), frequency, endDate);
+          if (newDates.length === 0) return;
+          const freshRes = await window.storage.get('meetups-list', true).catch(() => null);
+          const freshMeetups = freshRes && freshRes.value ? JSON.parse(freshRes.value) : meetups;
+          // Un autre onglet/appareil de l'organisateur a peut-être déjà prolongé la série entre-temps.
+          const alreadyMax = freshMeetups
+            .filter((m) => m.seriesId === seriesId)
+            .reduce((max, m) => Math.max(max, m.seriesIndex || 0), 0);
+          if (alreadyMax > (last.seriesIndex || 0)) return;
+          if (freshMeetups.some((m) => m.seriesId === seriesId && m.seriesStopped)) return;
+          const subscribers = (last.seriesSubscribers || []).filter((n) => n !== last.host);
+          const participants = [last.host, ...subscribers].slice(0, last.maxParticipants);
+          const participantGenders = {};
+          participants.forEach((p) => {
+            if (last.participantGenders && last.participantGenders[p]) participantGenders[p] = last.participantGenders[p];
+          });
+          const newOccurrences = newDates.map((datetime, i) => ({
+            ...last,
+            id: uid(),
+            datetime,
+            seriesIndex: (last.seriesIndex || 0) + 1 + i,
+            participants: [...participants],
+            participantGenders: { ...participantGenders },
+            seriesSubscribers: [...(last.seriesSubscribers || [])],
+            pendingRequests: [],
+            closed: false,
+            closedAt: undefined,
+            started: false,
+            startedAt: undefined,
+            ongoingDeferredUntil: undefined,
+            arrivals: {},
+            ratings: [],
+            reports: [],
+            createdAt: new Date().toISOString(),
+          }));
+          await saveMeetups([...newOccurrences, ...freshMeetups]);
+        } catch (err) {
+          // best effort : la série reste utilisable même si la prolongation automatique échoue,
+          // elle sera retentée au prochain rendu tant que le seuil est toujours atteint.
+        } finally {
+          extendingSeriesRef.current.delete(seriesId);
+        }
+      })();
+    });
+  }, [meetups, userName, saveMeetups]);
 
   // 30 min après l'heure prévue, on demande à l'organisateur si sa rencontre est toujours en
   // cours (voir confirmStillOngoing / closeMeetupNow), tant qu'il n'a pas répondu ou que le délai
@@ -1957,13 +2033,24 @@ export default function RezoApp() {
         ? generateSeriesOccurrences(form.datetime, form.recurrence, form.recurrenceEndDate)
         : [form.datetime];
       const seriesId = isRecurring ? uid() : null;
+      // seriesEndDate (ou null si "jusqu'à nouvel ordre") est répété sur chaque occurrence : c'est
+      // la seule trace de ce choix une fois les documents créés, nécessaire pour savoir si la série
+      // peut être prolongée automatiquement plus tard (voir l'effet d'extension plus bas).
       const newMeetups = occurrenceDates.map((datetime, index) => ({
         ...baseMeetup,
         id: uid(),
         datetime,
         participants: [name],
         participantGenders: { [name]: gender },
-        ...(isRecurring ? { seriesId, seriesFrequency: form.recurrence, seriesIndex: index } : {}),
+        ...(isRecurring
+          ? {
+              seriesId,
+              seriesFrequency: form.recurrence,
+              seriesIndex: index,
+              seriesEndDate: form.recurrenceEndDate || null,
+              seriesSubscribers: [],
+            }
+          : {}),
       }));
 
       const updated = [...newMeetups, ...meetups];
@@ -2094,22 +2181,30 @@ export default function RezoApp() {
         const pendingRequests = (m.pendingRequests || []).filter((r) => r.name !== requesterName);
         if (!accept || !request) return { ...m, pendingRequests };
         const participantGenders = { ...(m.participantGenders || {}), [requesterName]: request.gender };
-        return { ...m, pendingRequests, participants: [...m.participants, requesterName], participantGenders };
+        const seriesSubscribers = wantsSeries
+          ? [...new Set([...(m.seriesSubscribers || []), requesterName])]
+          : m.seriesSubscribers;
+        return { ...m, pendingRequests, participants: [...m.participants, requesterName], participantGenders, seriesSubscribers };
       }
       // Cascade : abonné à toute la série, on l'inscrit directement aux prochaines occurrences
       // (la validation initiale de l'organisateur suffit, pas de re-validation à chaque fois).
-      if (
-        wantsSeries &&
-        m.seriesId === meetup.seriesId &&
-        !m.closed &&
-        !isPast(m) &&
-        !m.participants.includes(requesterName) &&
-        m.participants.length < m.maxParticipants
-      ) {
+      // seriesSubscribers est aussi mis à jour sur CHAQUE occurrence (même complète ou passée) :
+      // c'est la seule trace persistée de "veut toutes les prochaines occurrences", nécessaire pour
+      // que l'extension automatique de la série (voir plus bas) sache qui réinscrire plus tard.
+      if (wantsSeries && m.seriesId === meetup.seriesId) {
+        const alreadySubscribed = (m.seriesSubscribers || []).includes(requesterName);
+        const canJoinThisOne =
+          !m.closed && !isPast(m) && !m.participants.includes(requesterName) && m.participants.length < m.maxParticipants;
+        if (alreadySubscribed && !canJoinThisOne) return m;
         return {
           ...m,
-          participants: [...m.participants, requesterName],
-          participantGenders: { ...(m.participantGenders || {}), [requesterName]: request.gender },
+          seriesSubscribers: [...new Set([...(m.seriesSubscribers || []), requesterName])],
+          ...(canJoinThisOne
+            ? {
+                participants: [...m.participants, requesterName],
+                participantGenders: { ...(m.participantGenders || {}), [requesterName]: request.gender },
+              }
+            : {}),
         };
       }
       return m;
@@ -2486,7 +2581,12 @@ export default function RezoApp() {
     const target = meetups.find((m) => m.id === id);
     let updated;
     if (scope === 'series' && target && target.seriesId) {
-      updated = meetups.filter((m) => !(m.seriesId === target.seriesId && !m.closed && !isPast(m)));
+      // Les occurrences futures non closes sont supprimées ; celles qui restent (passées/closes)
+      // sont marquées seriesStopped pour empêcher toute extension automatique ultérieure de
+      // resusciter une série que l'organisateur a délibérément arrêtée (voir l'effet d'extension).
+      updated = meetups
+        .filter((m) => !(m.seriesId === target.seriesId && !m.closed && !isPast(m)))
+        .map((m) => (m.seriesId === target.seriesId ? { ...m, seriesStopped: true } : m));
     } else {
       updated = meetups.filter((m) => m.id !== id);
     }

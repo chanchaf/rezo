@@ -331,20 +331,30 @@ plutôt qu'un système d'amis déclaratif classique — cohérent avec l'esprit
    (hebdomadaire / toutes les 2 semaines / mensuelle), avec fin "jusqu'à
    nouvel ordre" ou à une date précise. Chaque occurrence est un document de
    rencontre indépendant partageant un `seriesId` commun (voir
-   `generateSeriesOccurrences`) — génération **plafonnée à 12 occurrences**
-   par série au moment de la création (`SERIES_OCCURRENCE_CAP`) : il n'y a
-   pas de tâche planifiée côté serveur pour prolonger une série au-delà de ce
-   plafond, c'est une limite connue du prototype. Le flux n'affiche que la
+   `generateSeriesOccurrences`) — génération par lots de **12 occurrences**
+   (`SERIES_OCCURRENCE_CAP`) : à la création, puis un effet dédié
+   (`extendingSeriesRef` / l'effet "Prolongation automatique des séries")
+   surveille chaque série de l'organisateur connecté et génère un nouveau lot
+   dès qu'il ne reste plus que 2 occurrences futures — jusqu'à sa date de fin
+   si "jusqu'à une date précise" a été choisi, sinon indéfiniment tant que la
+   série n'a pas été arrêtée. Comme pour la clôture à 30 min, c'est déclenché
+   côté client de l'organisateur (pas de vrai cron serveur dans ce
+   prototype) : la prolongation n'a lieu que lorsque l'organisateur rouvre
+   l'app, avec un garde-fou (`seriesStopped`, `seriesIndex` déjà à jour) pour
+   éviter les doublons entre onglets/appareils. Le flux n'affiche que la
    prochaine occurrence à venir de chaque série (les occurrences passées
    restent visibles dans l'historique). Un participant qui rejoint choisit
    "juste cette fois" ou "toutes les prochaines occurrences" ; dans ce
    second cas, l'acceptation de l'organisateur sur la demande initiale
-   l'inscrit automatiquement à toutes les occurrences futures de la série
-   (voir la cascade dans `respondToRequest`), sans revalidation à chaque
-   fois — il peut toujours se désister d'une occurrence précise sans quitter
-   la série. L'organisateur peut modifier une occurrence isolément (édition
-   normale, ne touche pas les autres) ou arrêter toute la série (supprime les
-   occurrences futures non closes, garde l'historique passé intact).
+   l'inscrit automatiquement à toutes les occurrences futures de la série,
+   y compris celles générées par une prolongation ultérieure (liste
+   persistée dans `seriesSubscribers` sur chaque occurrence — voir la
+   cascade dans `respondToRequest`), sans revalidation à chaque fois — il
+   peut toujours se désister d'une occurrence précise sans quitter la série.
+   L'organisateur peut modifier une occurrence isolément (édition normale, ne
+   touche pas les autres) ou arrêter toute la série (supprime les occurrences
+   futures non closes, marque le reste `seriesStopped` pour bloquer toute
+   prolongation future, garde l'historique passé intact).
 
 3. **Cercle proche** : construit **automatiquement**, sans ajout manuel —
    toute personne avec qui l'utilisateur a terminé au moins une rencontre
@@ -394,7 +404,11 @@ plutôt qu'un système d'amis déclaratif classique — cohérent avec l'esprit
    qui vérifient l'identité de l'appelant plutôt que d'être grandes ouvertes.
 3. **Déployer le petit serveur `server/`** (push/verify/digest) quelque part
    d'accessible publiquement (Render, Fly.io, Railway…) pour que ces
-   fonctionnalités marchent aussi hors du poste de développement.
+   fonctionnalités marchent aussi hors du poste de développement — permettrait
+   aussi d'y déplacer la prolongation automatique des séries récurrentes
+   (actuellement déclenchée côté client de l'organisateur, voir "Couche
+   sociale" ci-dessus) en vrai cron serveur, pour qu'une série continue même
+   si l'organisateur n'a pas rouvert l'app depuis longtemps.
 4. **Découper `App.jsx`** en plusieurs fichiers : `components/MeetupCard.jsx`,
    `components/CreateModal.jsx`, `hooks/useMeetups.js`, `lib/geo.js`, etc.
    Le fichier actuel est monolithique par héritage du format "artefact".
