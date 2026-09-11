@@ -1,12 +1,13 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(() => ({
   plugins: [react()],
-  // Un "site de projet" GitHub Pages (chanchaf.github.io/rezo/) sert l'app depuis un
-  // sous-dossier, pas la racine : les chemins des assets doivent en tenir compte au build.
-  // En dev (`npm run dev`), on garde la racine pour que localhost:5173 fonctionne normalement.
-  base: command === 'build' ? '/rezo/' : '/',
+  // Domaine personnalisé (rezomeet.com, voir public/CNAME) : servi à la racine, pas depuis un
+  // sous-dossier — contrairement à l'ancienne URL "site de projet" chanchaf.github.io/rezo/, qui
+  // nécessitait un base "/rezo/" pour que les chemins des assets soient corrects. Avec un domaine
+  // personnalisé, la racine "/" est correcte à la fois en dev et en build.
+  base: '/',
   server: {
     port: 5173,
     open: true,
