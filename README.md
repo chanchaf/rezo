@@ -463,6 +463,14 @@ effectuée — pas systématiquement le chat (voir `openNotificationTarget`) :
   les demandeurs en attente), sauf à qui vient de démarrer. Même
   redirection que les autres : révèle la carte, où le bouton trajet privé
   ("Mon trajet" → "Je pars") est déjà accessible en un tap, sans chercher.
+- "Nouvel abonné" (quelqu'un suit un organisateur, voir "Suivre un
+  organisateur" ci-dessous) → ouvre le **profil de la personne qui vient de
+  s'abonner**. Regroupement anti-spam (`notifyNewFollow`) : au-delà de 3
+  nouveaux abonnés en moins de 24h (fenêtre glissante), les entrées
+  individuelles sont remplacées par une seule notification groupée dont le
+  compteur continue de grossir tant que d'autres abonnements arrivent dans
+  la même fenêtre — cliquable vers son propre profil (jamais la liste des
+  abonnés, cohérente avec la règle de confidentialité déjà posée).
 
 - **Registre partagé** `notifications` = `{ [destinataire]: [entrée, ...] }`,
   même convention que `follows`/`public-profiles` (voir `NOTIFICATIONS_KEY`,

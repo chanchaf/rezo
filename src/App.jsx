@@ -1047,6 +1047,19 @@ export default function RezoApp() {
   // repliement, "Déjà sur place" aussi), et seulement le chat pour un vrai nouveau message.
   const openNotificationTarget = (notif) => {
     setNotifPanelOpen(false);
+    // Nouvel abonné : ouvre le profil de la personne qui vient de s'abonner, pas une rencontre.
+    if (notif.kind === 'newFollower') {
+      setViewedProfileName(notif.profileName);
+      setShowProfilePage(true);
+      return;
+    }
+    // Abonnés groupés : pas de liste publique des abonnés (règle de confidentialité déjà posée
+    // pour "Suivre un organisateur") — direction son propre profil, où le compteur est visible.
+    if (notif.kind === 'newFollowersGroup') {
+      setViewedProfileName(null);
+      setShowProfilePage(true);
+      return;
+    }
     const meetup = meetups.find((m) => m.id === notif.meetupId);
     if (!meetup) {
       showToast(t('toast.meetupDeleted'));
@@ -1290,6 +1303,72 @@ export default function RezoApp() {
   // Abonnement à un organisateur : { [abonné]: [organisateur, ...] } (voir Objectif "limite à
   // poser" — jamais affiché comme liste publique, seulement un comptage). Relit une copie fraîche
   // avant d'écrire pour limiter (sans l'éliminer) le risque de course sur ce registre partagé.
+  // Regroupe les notifications de nouveaux abonnés au-delà de 3 en moins de 24h (fenêtre glissante) :
+  // évite de spammer un organisateur très suivi d'une notification par abonné individuel. Une fois
+  // le seuil dépassé, les entrées individuelles récentes sont remplacées par une seule entrée
+  // groupée dont le compteur continue de grossir tant que de nouveaux abonnements arrivent dans
+  // la même fenêtre — pas une nouvelle entrée groupée à chaque fois.
+  const NEW_FOLLOWER_GROUP_THRESHOLD = 3;
+  const NEW_FOLLOWER_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+  const notifyNewFollow = async (organizerName, followerName) => {
+    try {
+      const res = await window.storage.get(NOTIFICATIONS_KEY, true).catch(() => null);
+      const all = res && res.value ? JSON.parse(res.value) : {};
+      const list = Array.isArray(all[organizerName]) ? all[organizerName] : [];
+      const now = Date.now();
+      const withinWindow = (entry) => now - new Date(entry.createdAt).getTime() < NEW_FOLLOWER_WINDOW_MS;
+      const recentIndividuals = list.filter((n) => n.kind === 'newFollower' && withinWindow(n));
+      const recentGroup = list.find((n) => n.kind === 'newFollowersGroup' && withinWindow(n));
+      const priorCount = recentGroup ? recentGroup.count : recentIndividuals.length;
+      const newCount = priorCount + 1;
+      const shouldGroup = newCount > NEW_FOLLOWER_GROUP_THRESHOLD;
+
+      let updatedList;
+      let pushTitle;
+      let pushBody;
+      if (shouldGroup) {
+        const withoutRecent = list.filter(
+          (n) => !((n.kind === 'newFollower' || n.kind === 'newFollowersGroup') && withinWindow(n))
+        );
+        pushTitle = t('notif.newFollowersGroup.title');
+        pushBody = t('notif.newFollowersGroup.body', { count: newCount });
+        const groupEntry = {
+          id: uid(),
+          kind: 'newFollowersGroup',
+          title: pushTitle,
+          body: pushBody,
+          count: newCount,
+          meetupId: null,
+          chatId: null,
+          createdAt: new Date().toISOString(),
+          read: false,
+        };
+        updatedList = [groupEntry, ...withoutRecent].slice(0, MAX_NOTIFICATIONS_PER_USER);
+      } else {
+        pushTitle = t('notif.newFollower.title');
+        pushBody = t('notif.newFollower.body', { name: followerName });
+        const entry = {
+          id: uid(),
+          kind: 'newFollower',
+          title: pushTitle,
+          body: pushBody,
+          profileName: followerName,
+          meetupId: null,
+          chatId: null,
+          createdAt: new Date().toISOString(),
+          read: false,
+        };
+        updatedList = [entry, ...list].slice(0, MAX_NOTIFICATIONS_PER_USER);
+      }
+      all[organizerName] = updatedList;
+      await window.storage.set(NOTIFICATIONS_KEY, JSON.stringify(all), true);
+      notifyByName(organizerName, pushTitle, pushBody, '/');
+    } catch (err) {
+      // best effort
+    }
+  };
+
   const toggleFollow = (organizerName) => {
     requireName(async (name) => {
       if (name === organizerName) return;
@@ -1302,6 +1381,7 @@ export default function RezoApp() {
         await window.storage.set('follows', JSON.stringify(current), true);
         setFollows(current);
         showToast(alreadyFollowing ? t('toast.unfollowed', { name: organizerName }) : t('toast.followed', { name: organizerName }));
+        if (!alreadyFollowing) notifyNewFollow(organizerName, name);
       } catch (err) {
         showToast(t('toast.unreadUpdateFailed'));
       }
