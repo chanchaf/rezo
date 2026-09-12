@@ -4737,33 +4737,29 @@ export default function RezoApp() {
         .lang-menu-item.active { background: rgba(var(--live-rgb),0.12); color: var(--live); font-weight: 600; }
         .auth-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 
-        /* Écrans dédiés Connexion/Inscription : thème sombre propre à ce modal, obtenu en
-           redéfinissant localement les variables déjà utilisées par les classes partagées
-           (.field input, .input-with-icon, .auth-oauth-btn, .modal-submit, .auth-separator...)
-           plutôt qu'en dupliquant leurs règles — elles héritent donc automatiquement du nouveau
-           look, sans toucher aux autres modales de l'app (note, filtres, création...) qui restent
-           inchangées. Couleurs REZO demandées : fond très sombre, accent turquoise plutôt que le
-           bleu/orange d'une maquette de référence. */
+        /* Écrans dédiés Connexion/Inscription : même palette claire que le reste de l'app (voir
+           les variables de .rezo-app plus haut), redéfinie localement ici pour que les classes
+           partagées (.field input, .input-with-icon, .auth-oauth-btn, .modal-submit,
+           .auth-separator...) l'héritent automatiquement sans dupliquer leurs règles, et sans
+           toucher aux autres modales de l'app (note, filtres, création...). Valeurs volontairement
+           identiques à .rezo-app — remplace le thème sombre/turquoise d'une maquette de référence
+           externe, qui tranchait avec le reste de l'app. */
         .modal-auth-dark {
-          --ink: #1B1E2A;
-          --card: #12141C;
-          --card-hover: #232838;
-          --border: #2A2E3D;
-          --border-strong: #3A3F52;
-          --text: #FFFFFF;
-          --muted: #9AA1B4;
-          --live: #4FD1C5;
-          --live-rgb: 79, 209, 197;
+          --ink: #F0F2F5;
+          --card: #FFFFFF;
+          --card-hover: #F7F8FA;
+          --border: #DADDE1;
+          --border-strong: #C6C9CC;
+          --text: #1C1E21;
+          --muted: #65676B;
+          --live: #1877F2;
+          --live-rgb: 24, 119, 242;
           --amber: #F2A65A;
-          --cta-grad: linear-gradient(135deg, #4FD1C5, #38B8AC);
+          --cta-grad: linear-gradient(135deg, #1877F2, #145DBF);
           background: var(--card);
           border: none;
           color: var(--text);
         }
-        /* "Fond clair" explicitement demandé pour Google/Facebook, même sur ce fond sombre. */
-        .modal-auth-dark .auth-oauth-btn { background: #FFFFFF; color: #17181C; border-color: #FFFFFF; }
-        .modal-auth-dark .auth-oauth-btn:hover { background: #F0F0F0; border-color: #F0F0F0; }
-        .modal-auth-dark .modal-submit:disabled { background: #2A2E3D; color: #6b7280; }
         .modal-auth-dark .auth-switch-btn { color: var(--muted); font-size: 12.5px; }
 
         .auth-dark-lang-row { display: flex; justify-content: flex-start; margin-bottom: 14px; }
@@ -4773,14 +4769,14 @@ export default function RezoApp() {
         }
         .auth-dark-back {
           position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-          width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.08);
-          border: none; color: #fff; display: flex; align-items: center; justify-content: center;
+          width: 36px; height: 36px; border-radius: 50%; background: var(--ink);
+          border: none; color: var(--text); display: flex; align-items: center; justify-content: center;
           cursor: pointer;
         }
         [dir="rtl"] .auth-dark-back { left: auto; right: 0; }
         .auth-dark-title {
           font-family: 'Space Grotesk', sans-serif; font-size: 21px; font-weight: 700;
-          color: #fff; text-align: center;
+          color: var(--text); text-align: center;
         }
         .auth-dark-subtitle {
           color: var(--muted); font-size: 13px; line-height: 1.55; text-align: center; margin: 10px 0 22px;

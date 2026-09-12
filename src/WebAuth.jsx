@@ -457,19 +457,22 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
         )}
       </div>
 
-      {/* Thème sombre/turquoise propre à cet écran (voir modal-auth-dark dans App.jsx pour
-          l'équivalent mobile) — couleurs REZO : fond #12141C, accent turquoise #4FD1C5, ambre
-          #F2A65A, plutôt que le bleu marine/orange d'une maquette de référence. Dupliqué plutôt
-          qu'importé : contrainte d'isolation totale entre WebAuth.jsx et App.jsx. */}
+      {/* Même palette claire que le reste de l'app RÉZO (voir modal-auth-dark dans App.jsx pour
+          l'équivalent mobile, valeurs identiques) : fond blanc, accent bleu #1877F2 — remplace le
+          thème sombre/turquoise d'une maquette de référence externe, qui tranchait avec le reste de
+          l'app. Dupliqué plutôt qu'importé : contrainte d'isolation totale entre WebAuth.jsx et
+          App.jsx. */}
       <style>{`
         .rezo-webauth {
-          --ink: #1B1E2A;
-          --card: #12141C;
-          --border: #2A2E3D;
-          --text: #FFFFFF;
-          --muted: #9AA1B4;
-          --live: #4FD1C5;
-          --live-rgb: 79, 209, 197;
+          --ink: #F5F5F7;
+          --card: #FFFFFF;
+          --card-hover: #F7F8FA;
+          --border: #DADDE1;
+          --border-strong: #C6C9CC;
+          --text: #1C1E21;
+          --muted: #65676B;
+          --live: #1877F2;
+          --live-rgb: 24, 119, 242;
           --amber: #F2A65A;
           min-height: 100dvh; width: 100%; background: var(--card);
           display: flex; align-items: center; justify-content: center; padding: 32px 16px;
@@ -486,11 +489,11 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
           padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text);
           cursor: pointer; font-family: 'Inter', sans-serif;
         }
-        .webauth-lang-btn:hover { border-color: #3A3F52; }
+        .webauth-lang-btn:hover { border-color: var(--border-strong); }
         .webauth-lang-menu {
           position: absolute; top: calc(100% + 6px); left: 0; z-index: 10;
-          background: var(--ink); border: 1px solid var(--border); border-radius: 10px;
-          box-shadow: 0 8px 20px rgba(0,0,0,0.3); padding: 4px; min-width: 140px;
+          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          box-shadow: 0 8px 20px rgba(0,0,0,0.12); padding: 4px; min-width: 140px;
           display: flex; flex-direction: column; gap: 2px;
         }
         [dir="rtl"] .webauth-lang-menu { left: auto; right: 0; }
@@ -499,7 +502,7 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
           font-size: 12.5px; color: var(--text); cursor: pointer; font-family: 'Inter', sans-serif;
         }
         [dir="rtl"] .webauth-lang-item { text-align: right; }
-        .webauth-lang-item:hover { background: #232838; }
+        .webauth-lang-item:hover { background: var(--card-hover); }
         .webauth-lang-item.active { background: rgba(var(--live-rgb),0.12); color: var(--live); font-weight: 600; }
 
         .webauth-topbar {
@@ -508,14 +511,14 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
         }
         .webauth-back {
           position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-          width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.08);
-          border: none; color: #fff; font-size: 16px; display: flex; align-items: center;
+          width: 36px; height: 36px; border-radius: 50%; background: var(--ink);
+          border: none; color: var(--text); font-size: 16px; display: flex; align-items: center;
           justify-content: center; cursor: pointer;
         }
         [dir="rtl"] .webauth-back { left: auto; right: 0; }
         .webauth-title {
           font-family: 'Space Grotesk', sans-serif; font-size: 21px; font-weight: 700;
-          color: #fff; text-align: center;
+          color: var(--text); text-align: center;
         }
         .webauth-subtitle {
           color: var(--muted); font-size: 13px; line-height: 1.55; text-align: center; margin: 10px 0 22px;
@@ -525,7 +528,7 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
           border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 10px; line-height: 1.4;
         }
         .webauth-devcode {
-          background: rgba(79,209,197,0.1); border: 1px solid rgba(79,209,197,0.3); color: var(--live);
+          background: rgba(var(--live-rgb),0.1); border: 1px solid rgba(var(--live-rgb),0.3); color: var(--live);
           font-size: 12.5px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px;
         }
         .webauth-field-row { display: flex; gap: 10px; }
@@ -579,10 +582,10 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
           cursor: pointer; margin-bottom: 10px; font-family: 'Inter', sans-serif; border: none;
           display: flex; align-items: center; justify-content: center; gap: 10px;
         }
-        .webauth-btn-primary { background: linear-gradient(135deg, #4FD1C5, #38B8AC); color: #fff; box-shadow: 0 6px 16px rgba(79,209,197,0.28); }
+        .webauth-btn-primary { background: linear-gradient(135deg, #1877F2, #145DBF); color: #fff; box-shadow: 0 6px 16px rgba(var(--live-rgb),0.28); }
         .webauth-btn-primary:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
-        .webauth-oauth-btn { background: #FFFFFF; color: #17181C; border: 1px solid #FFFFFF; }
-        .webauth-oauth-btn:hover { background: #F0F0F0; }
+        .webauth-oauth-btn { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+        .webauth-oauth-btn:hover { background: var(--card-hover); }
         .webauth-oauth-btn:disabled { opacity: 0.6; cursor: default; }
         .webauth-sep {
           display: flex; align-items: center; gap: 10px; margin: 16px 0; color: var(--muted); font-size: 11.5px;

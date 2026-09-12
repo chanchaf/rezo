@@ -229,11 +229,17 @@ Avant de pouvoir créer/rejoindre une rencontre, discuter, inviter ou noter,
 l'utilisateur doit :
 
 1. **S'authentifier**, via deux écrans dédiés — **Connexion** et **Créez
-   votre compte** — au thème sombre/turquoise propre à REZO (fond `#12141C`,
-   accent `#4FD1C5`, ambre `#F2A65A`), identiques en structure sur mobile
-   (`App.jsx`, classe `.modal-auth-dark`) et sur web (`WebAuth.jsx`, mêmes
-   classes `.webauth-*` dupliquées avec les mêmes couleurs — contrainte
-   d'isolation totale entre les deux fichiers, voir plus haut) :
+   votre compte** — reprenant la même palette claire que le reste de l'app
+   (fond blanc `#FFFFFF`, champs gris très clair `#F5F5F7`/`#F0F2F5`, accent
+   bleu `#1877F2` déjà utilisé pour le bouton "+" et les éléments actifs de
+   la barre de navigation), identiques en structure sur mobile (`App.jsx`,
+   classe `.modal-auth-dark` — nom conservé mais valeurs désormais claires,
+   voir son commentaire) et sur web (`WebAuth.jsx`, mêmes classes
+   `.webauth-*` dupliquées avec les mêmes couleurs — contrainte d'isolation
+   totale entre les deux fichiers, voir plus haut). Une première version
+   reprenait un thème sombre/turquoise inspiré d'une maquette de référence
+   externe, remplacé depuis pour rester cohérent visuellement avec le reste
+   de l'app :
    - **Connexion** : e-mail + mot de passe, lien "Mot de passe oublié ?",
      puis Google/Facebook en repli.
    - **Créez votre compte** : nom + prénom (obligatoires), e-mail, mot de
