@@ -272,14 +272,38 @@ l'utilisateur doit :
      `hashPassword`/`isPasswordStrongEnough` dans `App.jsx`). Chaque compte
      stocke aussi `name`/`lastName`/`phone`/`acceptedMarketing`, capturés dès
      l'inscription plutôt qu'à l'étape suivante de complétion de profil.
-   - **Google / Facebook** : boutons présents (façon Glovo) mais non
-     connectés — nécessiteraient de vraies applications OAuth (client ID
-     Google, App ID + secret Facebook) qu'on ne peut pas improviser dans ce
-     projet. Au clic, un message clair l'indique plutôt que de simuler une
-     fausse connexion (voir `handleOAuthStub`). Idem pour "Mot de passe
-     oublié ?" et les liens légaux (reCAPTCHA, politique de confidentialité,
-     conditions d'utilisation) : aucune vraie page/flux derrière pour
-     l'instant.
+   - **Google / Facebook** : vraie connexion via `signInWithPopup` (Firebase
+     Auth), voir `handleOAuthLogin` dans `App.jsx` et `WebAuth.jsx` (web,
+     via `syncOAuthAccount` dans `src/lib/webAuth.js`). L'e-mail renvoyé par
+     le fournisseur sert de clé dans le même registre partagé `accounts` que
+     la connexion e-mail/mot de passe : un compte Google/Facebook et un
+     compte e-mail avec la même adresse sont donc unifiés. Si un compte
+     existe déjà pour cet e-mail avec un profil complet (nom, genre,
+     activités), connexion directe à l'app ; sinon, le compte est créé
+     (prérempli avec le nom et la photo du fournisseur) et enchaîne sur
+     l'écran de complétion de profil déjà existant. Erreurs gérées avec des
+     messages clairs (popup bloquée par le navigateur, adresse déjà liée à un
+     autre mode de connexion, domaine non autorisé, fournisseur pas encore
+     activé côté Firebase…) — une fermeture volontaire de la popup par
+     l'utilisateur n'affiche rien.
+
+     ⚠️ **Configuration manuelle requise côté Firebase** (impossible à faire
+     depuis ce dépôt) : dans la console Firebase → Authentication → Sign-in
+     method, activer les fournisseurs **Google** et **Facebook**. Google
+     fonctionne dès l'activation (Firebase gère son propre client OAuth).
+     Facebook nécessite en plus une vraie application Meta for Developers
+     (developers.facebook.com) avec son App ID + App Secret collés dans la
+     console Firebase, et l'URI de redirection OAuth
+     `https://<project-id>.firebaseapp.com/__/auth/handler` ajoutée dans les
+     paramètres de l'app Facebook. Sans cette configuration, le clic échoue
+     proprement avec le message "Ce mode de connexion n'est pas encore
+     activé côté Firebase" plutôt qu'un crash. Penser aussi à ajouter
+     `rezomeet.com` (et tout autre domaine de déploiement) aux "Authorized
+     domains" de Firebase Authentication.
+
+     Idem pour "Mot de passe oublié ?" et les liens légaux (reCAPTCHA,
+     politique de confidentialité, conditions d'utilisation) : aucune vraie
+     page/flux derrière pour l'instant.
 2. **Remplir son profil** : prénom, nom, sexe, pays (présélectionné via
    géolocalisation IP, repli sur le Maroc), ville, activités préférées, photo
    optionnelle. Cette étape est obligatoire et s'enchaîne automatiquement

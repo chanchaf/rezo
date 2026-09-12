@@ -11,6 +11,8 @@ import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscr
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
 import { LANGUAGES, translate, detectBrowserLanguage, dirForLanguage } from './lib/i18n.js';
 import { PHONE_AUTH_ENABLED } from './lib/config.js';
+import { auth } from './lib/firebase.js';
+import { GoogleAuthProvider, FacebookAuthProvider, signInWithPopup } from 'firebase/auth';
 
 // Large éventail d'activités pour toucher un public international aux intérêts variés
 // (inspiré des catégories des grandes apps de meetup) tout en restant scannable dans une seule
@@ -344,6 +346,21 @@ function isNetworkError(err) {
 
 const SERVER_UNREACHABLE_MESSAGE =
   "Impossible de joindre le serveur partagé. Vérifie qu'il tourne (npm run server, ou npm run dev qui lance les deux) puis réessaie.";
+
+// Messages clairs pour les codes d'erreur réels de signInWithPopup (voir handleOAuthLogin),
+// à la place du message générique précédent qui annonçait Google/Facebook "pas encore disponible".
+const OAUTH_ERROR_MESSAGES = {
+  'auth/popup-blocked': 'Le navigateur a bloqué la fenêtre de connexion. Autorise les pop-ups pour ce site puis réessaie.',
+  'auth/account-exists-with-different-credential':
+    'Un compte existe déjà avec cette adresse via un autre mode de connexion (e-mail ou un autre fournisseur).',
+  'auth/network-request-failed': 'Connexion réseau impossible, réessaie.',
+  'auth/unauthorized-domain': "Ce domaine n'est pas autorisé pour la connexion (configuration Firebase à compléter).",
+  'auth/operation-not-allowed': "Ce mode de connexion n'est pas encore activé côté Firebase.",
+};
+
+function oauthErrorMessage(err) {
+  return OAUTH_ERROR_MESSAGES[err?.code] || err?.message || 'Connexion impossible, réessaie.';
+}
 
 async function loadAccounts() {
   try {
@@ -2060,10 +2077,114 @@ export default function RezoApp() {
     }
   };
 
-  // Google/Facebook nécessitent de vraies applications OAuth (client ID, App ID Facebook) qu'on ne
-  // peut pas improviser ici : plutôt que de simuler une fausse connexion, on l'annonce clairement.
-  const handleOAuthStub = (provider) => {
-    showToast(t('toast.oauthUnavailable', { provider }));
+  // Connexion réelle Google/Facebook via signInWithPopup (voir src/lib/firebase.js pour l'instance
+  // `auth` partagée, déjà utilisée pour l'authentification anonyme technique — signInWithPopup
+  // remplace simplement cette session anonyme par la vraie identité du fournisseur, sans lien
+  // explicite nécessaire puisque l'UID anonyme ne portait aucune donnée). L'e-mail renvoyé par le
+  // fournisseur sert de clé dans le même registre partagé `accounts` que la connexion e-mail/mot de
+  // passe — un compte Google/Facebook et un compte e-mail avec la même adresse sont donc unifiés.
+  const handleOAuthLogin = async (providerName) => {
+    setAuthSubmitting(true);
+    setAuthError(null);
+    try {
+      const provider = providerName === 'Google' ? new GoogleAuthProvider() : new FacebookAuthProvider();
+      if (providerName === 'Google') provider.setCustomParameters({ prompt: 'select_account' });
+      const { user: oauthUser } = await signInWithPopup(auth, provider);
+      const email = (oauthUser.email || '').trim().toLowerCase();
+      if (!email) {
+        setAuthError(
+          `${providerName} n'a pas partagé d'adresse e-mail — utilise l'inscription par e-mail à la place.`
+        );
+        return;
+      }
+      const accounts = await loadAccounts();
+      let account = accounts[email];
+      const alreadyComplete = !!(account && account.name && account.lastName && account.gender && account.preferences?.length);
+      if (!account) {
+        const [guessFirst, ...guessRest] = (oauthUser.displayName || '').trim().split(/\s+/);
+        account = {
+          provider: providerName.toLowerCase(),
+          uid: oauthUser.uid,
+          createdAt: new Date().toISOString(),
+          language,
+          name: guessFirst || '',
+          lastName: guessRest.join(' '),
+          avatar: oauthUser.photoURL || null,
+        };
+        accounts[email] = account;
+        await saveAccounts(accounts);
+      }
+      const name = account.name || '';
+      const lastName = account.lastName || '';
+      const country = account.country || 'Maroc';
+      const city = account.city || '';
+      const showLastName = !!account.showLastNamePublicly;
+      const showCity = !!account.showCityPublicly;
+      const cover = account.cover || null;
+      const bio = account.bio || '';
+      const gender = account.gender || '';
+      const preferences = account.preferences || [];
+      const avatar = account.avatar || null;
+      const phone = account.phone || null;
+      const phoneVerified = !!account.phoneVerified;
+      await window.storage.set('rezo-email', email, false);
+      if (name) await window.storage.set('rezo-username', name, false);
+      if (lastName) await window.storage.set('rezo-lastname', lastName, false);
+      await window.storage.set('rezo-country', country, false);
+      if (city) await window.storage.set('rezo-city', city, false);
+      await window.storage.set('rezo-show-lastname', showLastName ? 'true' : 'false', false);
+      await window.storage.set('rezo-show-city', showCity ? 'true' : 'false', false);
+      if (cover) await window.storage.set('rezo-cover', cover, false);
+      if (bio) await window.storage.set('rezo-bio', bio, false);
+      if (gender) await window.storage.set('rezo-gender', gender, false);
+      if (preferences.length) await window.storage.set('rezo-preferences', JSON.stringify(preferences), false);
+      if (avatar) await window.storage.set('rezo-avatar', avatar, false);
+      if (phone) await window.storage.set('rezo-phone', phone, false);
+      await window.storage.set('rezo-phone-verified', phoneVerified ? 'true' : 'false', false);
+      setUserEmail(email);
+      setUserName(name || null);
+      setUserLastName(lastName || null);
+      setUserCountry(country);
+      setUserCity(city || null);
+      setUserShowLastName(showLastName);
+      setUserShowCity(showCity);
+      setUserCover(cover);
+      setUserBio(bio);
+      setUserGender(gender || null);
+      setUserPreferences(preferences);
+      setUserAvatar(avatar);
+      setUserPhone(phone);
+      setUserPhoneVerified(phoneVerified);
+      setShowAuthModal(false);
+      setNameDraft(name);
+      setLastNameDraft(lastName);
+      setCountryDraft(country);
+      setCityDraft(city);
+      setShowLastNameDraft(showLastName);
+      setGenderDraft(gender);
+      setPreferencesDraft(preferences);
+      setAvatarDraft(null);
+      setCoverDraft(null);
+      setBioDraft(bio);
+      setPhoneDraft(phone || '');
+      setPhoneVerifiedDraft(phoneVerified);
+      resetPhoneVerifyUi();
+      // Profil déjà complet (retour) : connexion directe à l'app. Sinon, enchaîne sur l'écran de
+      // complétion déjà existant (prérempli avec ce qu'a fourni le fournisseur).
+      if (!alreadyComplete) {
+        setShowNameModal(true);
+        guessCountryFromIP().then((guessed) => {
+          setCountryDraft((current) => (current === 'Maroc' ? guessed : current));
+        });
+      }
+    } catch (err) {
+      // Fermeture volontaire de la fenêtre par l'utilisateur : pas une vraie erreur à afficher.
+      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+        setAuthError(oauthErrorMessage(err));
+      }
+    } finally {
+      setAuthSubmitting(false);
+    }
   };
 
   const showLegalPlaceholder = (label) => {
@@ -4592,6 +4713,7 @@ export default function RezoApp() {
           margin-top: 8px; font-family: 'Inter', sans-serif;
         }
         .auth-oauth-btn:hover { border-color: var(--border-strong); background: var(--card-hover); }
+        .auth-oauth-btn:disabled { opacity: 0.6; cursor: default; }
 
         .lang-menu-wrap { position: relative; display: inline-block; }
         .lang-menu-btn {
@@ -5625,10 +5747,10 @@ export default function RezoApp() {
 
                 <div className="auth-separator"><span>{t('auth.orWith')}</span></div>
 
-                <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
+                <button type="button" className="auth-oauth-btn" disabled={authSubmitting} onClick={() => handleOAuthLogin('Google')}>
                   <GoogleIcon /> {t('auth.continueGoogle')}
                 </button>
-                <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Facebook')}>
+                <button type="button" className="auth-oauth-btn" disabled={authSubmitting} onClick={() => handleOAuthLogin('Facebook')}>
                   <FacebookIcon /> {t('auth.continueFacebook')}
                 </button>
 

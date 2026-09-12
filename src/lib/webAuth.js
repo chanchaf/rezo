@@ -153,6 +153,35 @@ export async function loginEmailAccount(email, password) {
   return trimmed;
 }
 
+// Connexion Google/Facebook (voir WebAuth.jsx, signInWithPopup) : même registre partagé `accounts`
+// que la connexion e-mail/mot de passe, clé = e-mail fourni par le fournisseur — un compte Google et
+// un compte e-mail avec la même adresse sont donc unifiés. `oauthUser` est le `result.user` renvoyé
+// par signInWithPopup ({ uid, email, displayName, photoURL }).
+export async function syncOAuthAccount(providerName, oauthUser, language) {
+  const email = (oauthUser.email || '').trim().toLowerCase();
+  if (!email) {
+    throw new Error(`${providerName} n'a pas partagé d'adresse e-mail — utilise l'inscription par e-mail à la place.`);
+  }
+  const accounts = await loadAccounts();
+  let account = accounts[email];
+  if (!account) {
+    const [guessFirst, ...guessRest] = (oauthUser.displayName || '').trim().split(/\s+/);
+    account = {
+      provider: providerName.toLowerCase(),
+      uid: oauthUser.uid,
+      createdAt: new Date().toISOString(),
+      language,
+      name: guessFirst || '',
+      lastName: guessRest.join(' '),
+      avatar: oauthUser.photoURL || null,
+    };
+    accounts[email] = account;
+    await saveAccounts(accounts);
+  }
+  applySessionToLocalStorage(email, account, { phone: account.phone, phoneVerified: account.phoneVerified });
+  return email;
+}
+
 export async function completePhoneLogin(fullPhone) {
   const accounts = await loadAccounts();
   const account = accounts[fullPhone] || {};

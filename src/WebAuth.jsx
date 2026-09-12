@@ -4,10 +4,28 @@ import {
   createEmailAccount,
   loginEmailAccount,
   completePhoneLogin,
+  syncOAuthAccount,
   isPasswordStrongEnough,
   DIAL_CODES,
 } from './lib/webAuth.js';
+import { auth } from './lib/firebase.js';
+import { GoogleAuthProvider, FacebookAuthProvider, signInWithPopup } from 'firebase/auth';
 import { LANGUAGES } from './lib/i18n.js';
+
+// Messages clairs pour les codes d'erreur réels de signInWithPopup — dupliqué depuis App.jsx (voir
+// OAUTH_ERROR_MESSAGES), même contrainte d'isolation totale que le reste de ce fichier.
+const OAUTH_ERROR_MESSAGES = {
+  'auth/popup-blocked': 'Le navigateur a bloqué la fenêtre de connexion. Autorise les pop-ups pour ce site puis réessaie.',
+  'auth/account-exists-with-different-credential':
+    'Un compte existe déjà avec cette adresse via un autre mode de connexion (e-mail ou un autre fournisseur).',
+  'auth/network-request-failed': 'Connexion réseau impossible, réessaie.',
+  'auth/unauthorized-domain': "Ce domaine n'est pas autorisé pour la connexion (configuration Firebase à compléter).",
+  'auth/operation-not-allowed': "Ce mode de connexion n'est pas encore activé côté Firebase.",
+};
+
+function oauthErrorMessage(err) {
+  return OAUTH_ERROR_MESSAGES[err?.code] || err?.message || 'Connexion impossible, réessaie.';
+}
 
 // Découpe un texte traduit contenant des jetons {clé} pour y injecter des éléments React (liens
 // cliquables notamment). Dupliqué depuis App.jsx (voir interpolateNodes) — contrainte d'isolation
@@ -200,7 +218,28 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
     }
   };
 
-  const oauthStub = (provider) => setError(t('toast.oauthUnavailable', { provider }));
+  const handleOAuthLogin = async (providerName) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const provider = providerName === 'Google' ? new GoogleAuthProvider() : new FacebookAuthProvider();
+      if (providerName === 'Google') provider.setCustomParameters({ prompt: 'select_account' });
+      const { user: oauthUser } = await signInWithPopup(auth, provider);
+      await syncOAuthAccount(providerName, oauthUser, language);
+      // Rechargement : App.jsx reprend la main avec la session déjà posée dans localStorage. Si le
+      // profil (genre, activités...) n'est pas encore complet, App.jsx propose lui-même l'écran de
+      // complétion dès la première action qui le requiert — même comportement qu'une inscription par
+      // e-mail sur le web.
+      finishAuth();
+    } catch (err) {
+      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+        setError(oauthErrorMessage(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const legalPlaceholder = (label) => setError(t('toast.legalPlaceholder', { label }));
 
   const switchMode = () => {
@@ -372,10 +411,10 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
 
             <div className="webauth-sep"><span>{t('auth.orWith')}</span></div>
 
-            <button type="button" className="webauth-btn webauth-oauth-btn" onClick={() => oauthStub('Google')}>
+            <button type="button" className="webauth-btn webauth-oauth-btn" disabled={busy} onClick={() => handleOAuthLogin('Google')}>
               <GoogleIcon /> {t('auth.continueGoogle')}
             </button>
-            <button type="button" className="webauth-btn webauth-oauth-btn" onClick={() => oauthStub('Facebook')}>
+            <button type="button" className="webauth-btn webauth-oauth-btn" disabled={busy} onClick={() => handleOAuthLogin('Facebook')}>
               <FacebookIcon /> {t('auth.continueFacebook')}
             </button>
 
@@ -544,6 +583,7 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
         .webauth-btn-primary:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
         .webauth-oauth-btn { background: #FFFFFF; color: #17181C; border: 1px solid #FFFFFF; }
         .webauth-oauth-btn:hover { background: #F0F0F0; }
+        .webauth-oauth-btn:disabled { opacity: 0.6; cursor: default; }
         .webauth-sep {
           display: flex; align-items: center; gap: 10px; margin: 16px 0; color: var(--muted); font-size: 11.5px;
         }
