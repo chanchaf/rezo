@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
 import { createEmailAccount, loginEmailAccount, completePhoneLogin, DIAL_CODES } from './lib/webAuth.js';
-
-// Même flag que App.jsx (dupliqué ici pour rester isolé de App.jsx, voir la contrainte
-// d'isolation) : retire temporairement le téléphone/SMS tant que le plan Blaze n'est pas activé.
-// À repasser à true quand le SMS payant est prêt — le code reste intact en dessous.
-const PHONE_AUTH_ENABLED = false;
+// Flag partagé avec App.jsx via ce fichier neutre (ni l'un ni l'autre — respecte la contrainte
+// d'isolation totale entre les deux écrans, voir plus bas) : un seul endroit à changer pour
+// activer/désactiver le téléphone/SMS sur mobile et web en même temps.
+import { PHONE_AUTH_ENABLED } from './lib/config.js';
 
 // Écran de connexion/inscription dédié au web (voir Landing.jsx et la contrainte d'isolation totale
 // vis-à-vis de App.jsx dans main.jsx). Reproduit le même choix de méthodes que le flux mobile

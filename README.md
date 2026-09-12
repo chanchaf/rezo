@@ -231,12 +231,14 @@ l'utilisateur doit :
      "Modifier le profil".
 
      🔒 **Retiré temporairement de l'écran de connexion/inscription**
-     (mobile et web) derrière le flag `PHONE_AUTH_ENABLED = false` (dupliqué
-     dans `App.jsx` et `WebAuth.jsx`) : l'envoi réel de SMS nécessiterait le
-     plan payant Firebase Blaze, pas encore activé. Tout le code (champ
-     pays/téléphone, `requestPhoneAuthCode`/`confirmPhoneAuthCode`,
-     `submitPhoneRequest`/`submitPhoneConfirm`) reste intact — repasser le
-     flag à `true` des deux côtés suffit à le réactiver, sans rien
+     (mobile et web) derrière `PHONE_AUTH_ENABLED = false` dans
+     `src/lib/config.js` — un seul flag partagé, importé à la fois par
+     `App.jsx` et `WebAuth.jsx`, pour ne jamais l'oublier activé d'un côté
+     et pas l'autre. L'envoi réel de SMS nécessiterait le plan payant
+     Firebase Blaze, pas encore activé. Tout le code (champ pays/téléphone,
+     `requestPhoneAuthCode`/`confirmPhoneAuthCode`,
+     `submitPhoneRequest`/`submitPhoneConfirm`) reste intact — repasser ce
+     seul flag à `true` réactive le téléphone des deux côtés, sans rien
      reconstruire. En attendant, l'écran ne propose que Google/Facebook/
      e-mail.
    - **E-mail + mot de passe** : entièrement réel dans les limites d'un

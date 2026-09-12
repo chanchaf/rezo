@@ -10,6 +10,7 @@ import {
 import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscribeFromPush, notifyByName } from './lib/push.js';
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
 import { LANGUAGES, translate, detectBrowserLanguage, dirForLanguage } from './lib/i18n.js';
+import { PHONE_AUTH_ENABLED } from './lib/config.js';
 
 // Large éventail d'activités pour toucher un public international aux intérêts variés
 // (inspiré des catégories des grandes apps de meetup) tout en restant scannable dans une seule
@@ -275,13 +276,6 @@ const REZO_HOST_NAME = 'Équipe REZO';
 // (jamais réaffiché ailleurs dans l'UI), pas le libellé, pour rester indépendant de la langue.
 const REPORT_REASONS = ['spam', 'inappropriate', 'scam', 'fakeProfile', 'other'];
 
-// Retiré temporairement de l'écran de connexion/inscription (numéro de téléphone + SMS/WhatsApp) :
-// nécessite le plan payant Blaze côté Firebase pour l'envoi réel de SMS, pas encore activé. Le code
-// (champ pays/téléphone, requestPhoneAuthCode, confirmPhoneAuthCode...) reste en place intact,
-// juste caché derrière ce flag — pour le réactiver plus tard (le jour où le SMS est payé), il suffit
-// de repasser ce booléen à true, sans rien reconstruire. Même flag dupliqué dans WebAuth.jsx (écran
-// équivalent côté web) pour rester cohérent des deux côtés.
-const PHONE_AUTH_ENABLED = false;
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
