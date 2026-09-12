@@ -435,10 +435,20 @@ mesures pour ne jamais montrer un mur sans solution :
 
 Icône cloche dans le bandeau du haut, alignée avec "REZO" et le sous-titre —
 badge rouge avec le nombre de notifications non lues, tap pour ouvrir un
-panneau déroulant listant l'historique récent (jusqu'à 50 par personne),
-chacune cliquable pour aller directement au chat de la rencontre concernée.
+panneau déroulant listant l'historique récent (jusqu'à 50 par personne).
 Ouvrir le panneau marque tout comme lu (pas de marquage notification par
 notification).
+
+Chaque notification amène là où l'action correspondante peut être
+effectuée — pas systématiquement le chat (voir `openNotificationTarget`) :
+- "Nouvelle demande" / "Demande acceptée" / "Quelqu'un est arrivé" →
+  `revealMeetup()` réinitialise les filtres du flux "Découvrir" qui
+  pourraient la masquer (activité, zone, rayon, tranche d'âge, "Mes
+  sorties"), fait défiler jusqu'à sa carte (`#meetup-card-{id}`) et
+  l'entoure brièvement d'un halo — la boîte "demandes en attente" ou
+  "Déjà sur place" y est déjà visible sans repliement.
+- "Nouveau message" (uniquement celle-ci) → ouvre directement le chat de la
+  rencontre.
 
 - **Registre partagé** `notifications` = `{ [destinataire]: [entrée, ...] }`,
   même convention que `follows`/`public-profiles` (voir `NOTIFICATIONS_KEY`,

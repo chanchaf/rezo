@@ -737,6 +737,7 @@ export default function RezoApp() {
   const [follows, setFollows] = useState({});
   const [myNotifications, setMyNotifications] = useState([]);
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
+  const [highlightedMeetupId, setHighlightedMeetupId] = useState(null);
   const [showCirclePage, setShowCirclePage] = useState(false);
   // Langue d'interface : par appareil tant qu'aucun compte n'est connecté, puis synchronisée dans
   // le compte (voir setLanguage) — jamais bloquant, repli FR géré par translate() si une clé manque.
@@ -1020,8 +1021,30 @@ export default function RezoApp() {
     });
   };
 
-  // Clic sur une notification : direction le chat de la rencontre concernée, qui sert déjà de
-  // point d'entrée central vers une rencontre partout ailleurs dans l'app.
+  // Amène la rencontre concernée à l'écran, quels que soient les filtres actuels du flux
+  // "Découvrir" — sinon un clic sur une notification pourrait sembler ne rien faire si la
+  // rencontre est masquée par une activité/zone/rayon/tranche d'âge sélectionnée ailleurs.
+  const revealMeetup = (meetup) => {
+    setSelectedActivity('all');
+    setActivityQuery('');
+    setActivitySuggestOpen(false);
+    setSelectedAudience('all');
+    setAgeFilterMin(16);
+    setAgeFilterMax(99);
+    setZoneQuery('');
+    if (radiusKm < 30) setRadiusKm(30);
+    setMineOnly(false);
+    setShowPast(!!(meetup.closed || isPast(meetup)));
+    setHighlightedMeetupId(meetup.id);
+    setTimeout(() => {
+      document.getElementById(`meetup-card-${meetup.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+    setTimeout(() => setHighlightedMeetupId((current) => (current === meetup.id ? null : current)), 2500);
+  };
+
+  // Clic sur une notification : chaque type amène là où l'action correspondante peut être
+  // effectuée — la rencontre elle-même (la boîte "demandes en attente" y est déjà visible sans
+  // repliement, "Déjà sur place" aussi), et seulement le chat pour un vrai nouveau message.
   const openNotificationTarget = (notif) => {
     setNotifPanelOpen(false);
     const meetup = meetups.find((m) => m.id === notif.meetupId);
@@ -1029,7 +1052,11 @@ export default function RezoApp() {
       showToast(t('toast.meetupDeleted'));
       return;
     }
-    openChat(meetup);
+    if (notif.kind === 'chat') {
+      openChat(meetup);
+      return;
+    }
+    revealMeetup(meetup);
   };
 
   useEffect(() => {
@@ -3110,7 +3137,11 @@ export default function RezoApp() {
     const activityInfo = activityById(m.activity);
     const ActivityIcon = ACTIVITY_ICONS[m.activity] || Sparkles;
     return (
-      <div className={`card ${past ? 'card-past' : ''}`} key={m.id}>
+      <div
+        className={`card ${past ? 'card-past' : ''} ${highlightedMeetupId === m.id ? 'card-highlighted' : ''}`}
+        id={`meetup-card-${m.id}`}
+        key={m.id}
+      >
         <div
           className="card-banner"
           style={{ background: `linear-gradient(135deg, ${activityInfo.color}, ${shadeColor(activityInfo.color, -30)})` }}
@@ -3845,6 +3876,16 @@ export default function RezoApp() {
         }
         .delete-btn:hover { color: var(--amber); background: rgba(242,166,90,0.1); }
         .card-past { opacity: 0.55; }
+        /* Repère visuel temporaire après un clic sur une notification (voir revealMeetup) — attire
+           l'œil vers la bonne carte une fois le flux fait défiler jusqu'à elle, puis disparaît. */
+        .card-highlighted {
+          animation: card-highlight-pulse 2.5s ease-out;
+        }
+        @keyframes card-highlight-pulse {
+          0% { box-shadow: 0 0 0 3px var(--live); }
+          70% { box-shadow: 0 0 0 3px var(--live); }
+          100% { box-shadow: 0 0 0 0 rgba(var(--live-rgb), 0); }
+        }
         .audience-badge {
           align-self: flex-start;
           font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
