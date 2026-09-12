@@ -2634,6 +2634,19 @@ export default function RezoApp() {
     );
     await saveMeetups(updated);
     showToast(t('toast.meetupStarted'));
+    // Chaque participant accepté (pas les demandeurs en attente) sait immédiatement que c'est le
+    // moment de se mettre en route, sans avoir à ouvrir l'app pour vérifier — voir revealMeetup
+    // pour la redirection au clic (la rencontre, avec "Je pars" déjà accessible, pas le chat).
+    meetup.participants
+      .filter((p) => p !== userName)
+      .forEach((p) =>
+        notifyUser(p, {
+          kind: 'started',
+          title: t('notif.started.title'),
+          body: t('notif.started.body', { title: meetup.title }),
+          meetupId: meetup.id,
+        })
+      );
   };
 
   // L'organisateur répond "encore en cours" au check-in de 30 min : on repousse la question

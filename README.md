@@ -449,6 +449,11 @@ effectuée — pas systématiquement le chat (voir `openNotificationTarget`) :
   "Déjà sur place" y est déjà visible sans repliement.
 - "Nouveau message" (uniquement celle-ci) → ouvre directement le chat de la
   rencontre.
+- "La rencontre a démarré" (l'organisateur clique "Démarrer", voir le
+  cycle de vie plus haut) — envoyée à tous les participants acceptés (pas
+  les demandeurs en attente), sauf à qui vient de démarrer. Même
+  redirection que les autres : révèle la carte, où le bouton trajet privé
+  ("Mon trajet" → "Je pars") est déjà accessible en un tap, sans chercher.
 
 - **Registre partagé** `notifications` = `{ [destinataire]: [entrée, ...] }`,
   même convention que `follows`/`public-profiles` (voir `NOTIFICATIONS_KEY`,
