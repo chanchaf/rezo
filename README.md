@@ -347,9 +347,10 @@ l'utilisateur doit :
      d'utilisation" et "politique de confidentialité" de la case à cocher,
      eux, pointent vers de vraies pages — voir "Pages légales" plus haut.
 2. **Remplir son profil** : prénom, nom, sexe, pays (présélectionné via
-   géolocalisation IP, repli sur le Maroc), ville, activités préférées, photo
-   optionnelle. Cette étape est obligatoire et s'enchaîne automatiquement
-   après l'inscription ou la connexion.
+   géolocalisation IP quand elle aboutit — voir `guessCountryFromIP` — sinon
+   laissé à choisir soi-même, sans aucun pays présupposé par défaut), ville,
+   activités préférées, photo optionnelle. Cette étape est obligatoire et
+   s'enchaîne automatiquement après l'inscription ou la connexion.
 
    Seul le **prénom** est affiché publiquement (cartes, avatars, chat) — le
    nom de famille reste une donnée de profil privée, sauf si l'utilisateur
@@ -445,10 +446,10 @@ langues : **Français** (référence), **Anglais**, **Arabe** (RTL).
   cartes de rencontre, création/édition, page de profil, paramètres, les 5
   fenêtres de confirmation, chat, suivi de trajet) mais pas exhaustive à
   100 % — quelques recoins secondaires restent en français par défaut :
-  les modèles de démarrage rapide ("Foot ce soir"...), le sélecteur de
-  position de test (outil de dev), et le texte du message d'invitation
-  partagé. Dictionnaire dans `src/lib/i18n.js` (clé → FR/EN/AR) ;
-  `translate()` retombe sur le français si une clé manque dans une langue.
+  les modèles de démarrage rapide ("Foot ce soir"...), et le texte du
+  message d'invitation partagé. Dictionnaire dans `src/lib/i18n.js` (clé →
+  FR/EN/AR) ; `translate()` retombe sur le français si une clé manque dans
+  une langue.
 
 ## Adresses géolocalisées (autocomplétion + tri par distance)
 
@@ -482,6 +483,23 @@ l'avance un lieu où l'on ne se trouve pas encore).
   existait déjà pour le lien "Voir sur la carte" et "Mon trajet" ; l'ajout
   ici est la source de données (des coordonnées fiables dès la création) qui
   lui manquait, pas le calcul de distance lui-même.
+- **"Activités proches de moi" (`activateNearMe`)** : la ville déclarée au
+  profil reste la source de vérité pour le tri (toujours disponible, quelle
+  que soit la ville/le pays — aucune logique ne présuppose le Maroc ou une
+  ville en particulier) ; une vraie demande de permission navigateur
+  (`navigator.geolocation.getCurrentPosition`) tourne en parallèle comme
+  bonus silencieux, pour affiner l'ordre par distance réelle à l'intérieur du
+  groupe "même ville" si elle est accordée — fonctionne pour n'importe quel
+  point du globe (formule de haversine, voir `distanceKm`), pas seulement le
+  Maroc. Permission refusée ou position indisponible : un message unique
+  ("Position non disponible — tri basé sur ta ville de profil.") plutôt
+  qu'un vrai blocage, le tri par ville continuant de fonctionner normalement.
+  ⚠️ L'ancien repli de test avec villes marocaines codées en dur
+  (Casablanca/Rabat/Marrakech) et saisie manuelle de lat/lng — nécessaire
+  quand l'app tournait dans un iframe sandboxé où `navigator.geolocation` ne
+  fonctionnait pas — a été entièrement retiré maintenant que l'app est servie
+  depuis son propre domaine (rezomeet.com) : la vraie demande de permission
+  du navigateur fonctionne normalement.
 
 ## Éviter la "ville fantôme" (flux vide au lancement)
 

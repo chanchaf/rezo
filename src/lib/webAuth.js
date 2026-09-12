@@ -122,7 +122,9 @@ export function applySessionToLocalStorage(identifier, account, extra = {}) {
   if (extra.phoneVerified) personal['rezo-phone-verified'] = 'true';
   if (account?.name) personal['rezo-username'] = account.name;
   if (account?.lastName) personal['rezo-lastname'] = account.lastName;
-  personal['rezo-country'] = account?.country || 'Maroc';
+  // Pas de pays présupposé pour un compte tout juste créé (App.jsx complète ensuite via la
+  // géolocalisation IP, voir guessCountryFromIP) — `|| ''` seulement, jamais 'Maroc' par défaut.
+  personal['rezo-country'] = account?.country || '';
   if (account?.city) personal['rezo-city'] = account.city;
   personal['rezo-show-lastname'] = account?.showLastNamePublicly ? 'true' : 'false';
   personal['rezo-show-city'] = account?.showCityPublicly ? 'true' : 'false';

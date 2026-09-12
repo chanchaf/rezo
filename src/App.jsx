@@ -81,12 +81,6 @@ function shadeColor(hex, percent) {
   return `#${(0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1)}`;
 }
 
-const MOROCCO_PRESETS = [
-  { label: 'Casablanca centre', coords: { lat: 33.5731, lng: -7.5898 } },
-  { label: 'Rabat', coords: { lat: 34.0209, lng: -6.8416 } },
-  { label: 'Marrakech', coords: { lat: 31.6295, lng: -7.9811 } },
-];
-
 // Formate un objet Date en valeur compatible avec <input type="datetime-local">, en heure locale
 // (surtout ne pas utiliser toISOString ici, qui est en UTC et décalerait l'heure affichée).
 function toDatetimeLocalValue(date) {
@@ -195,10 +189,11 @@ const DIAL_CODES = [
 ];
 
 // Devine le pays via géolocalisation IP (best effort, pas de clé requise) pour pré-sélectionner le
-// champ Pays à l'inscription ; le Maroc reste le repli par défaut si ça échoue ou prend trop de temps.
-// ipapi.co renvoie le nom du pays en anglais ; la liste COUNTRIES est en français (cohérente avec
-// le reste de l'UI) — on traduit les cas les plus probables, plutôt que d'accepter un nom qui ne
-// correspondrait à aucune <option> du menu déroulant.
+// champ Pays à l'inscription ; renvoie null si ça échoue, prend trop de temps, ou si le pays détecté
+// n'est pas dans la liste — aucun repli géographique par défaut, pour ne présupposer aucun pays en
+// particulier : l'utilisateur choisit alors lui-même (voir les appelants). ipapi.co renvoie le nom du
+// pays en anglais ; la liste COUNTRIES est en français (cohérente avec le reste de l'UI) — on traduit
+// les cas les plus probables, plutôt que d'accepter un nom qui ne correspondrait à aucune <option>.
 const ENGLISH_TO_FRENCH_COUNTRY = {
   Morocco: 'Maroc',
   France: 'France',
@@ -216,12 +211,12 @@ async function guessCountryFromIP() {
     const timeout = setTimeout(() => controller.abort(), 2500);
     const res = await fetch('https://ipapi.co/country_name/', { signal: controller.signal });
     clearTimeout(timeout);
-    if (!res.ok) return 'Maroc';
+    if (!res.ok) return null;
     const name = (await res.text()).trim();
     if (COUNTRIES.includes(name)) return name;
-    return ENGLISH_TO_FRENCH_COUNTRY[name] || 'Maroc';
+    return ENGLISH_TO_FRENCH_COUNTRY[name] || null;
   } catch (err) {
-    return 'Maroc';
+    return null;
   }
 }
 
@@ -834,7 +829,9 @@ export default function RezoApp() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [lastNameDraft, setLastNameDraft] = useState('');
-  const [countryDraft, setCountryDraft] = useState('Maroc');
+  // Vide par défaut (pas de pays présupposé) : rempli par la géolocalisation IP si elle aboutit
+  // (voir guessCountryFromIP), sinon laissé à l'utilisateur de choisir lui-même.
+  const [countryDraft, setCountryDraft] = useState('');
   const [cityDraft, setCityDraft] = useState('');
   const [showLastNameDraft, setShowLastNameDraft] = useState(false);
   const [genderDraft, setGenderDraft] = useState('');
@@ -855,8 +852,6 @@ export default function RezoApp() {
   // qu'un bonus optionnel pour affiner le tri à l'intérieur du groupe "même ville" (voir activateNearMe).
   const [nearMeActive, setNearMeActive] = useState(false);
   const [radiusKm, setRadiusKm] = useState(5);
-  const [manualLat, setManualLat] = useState('');
-  const [manualLng, setManualLng] = useState('');
   const [showPast, setShowPast] = useState(false);
   const [mineOnly, setMineOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1675,21 +1670,6 @@ export default function RezoApp() {
     }
   }, [meetups, userName, now, ratingMeetup, dismissedRatingIds]);
 
-  const applyManualCoords = async (coords) => {
-    if (!coords || isNaN(coords.lat) || isNaN(coords.lng)) {
-      showToast(t('toast.invalidCoords'));
-      return;
-    }
-    setUserCoords(coords);
-    setLocationError(null);
-    try {
-      await window.storage.set('rezo-coords', JSON.stringify(coords), false);
-    } catch (err) {
-      // best effort
-    }
-    showToast(t('toast.positionSetManually'));
-  };
-
   // Le GPS seul n'est pas fiable (permission refusée, contexte restreint...) : la source principale
   // de proximité est désormais la ville déclarée au profil (toujours disponible une fois
   // renseignée), le GPS restant un bonus silencieux pour affiner le tri par distance réelle à
@@ -1728,12 +1708,11 @@ export default function RezoApp() {
             // best effort persistence
           }
         },
-        (err) => {
-          setLocationError(
-            err.code === 1
-              ? 'Localisation précise refusée — le tri reste basé sur ta ville.'
-              : "Position précise indisponible — le tri reste basé sur ta ville."
-          );
+        () => {
+          // Permission refusée ou position indisponible, quelle qu'en soit la raison précise : un
+          // seul message, cohérent avec la suppression du repli manuel — le tri par ville déclarée
+          // (voir nearCityMeetups) continue de fonctionner normalement dans tous les cas.
+          setLocationError(t('toast.positionUnavailable'));
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
@@ -1903,7 +1882,7 @@ export default function RezoApp() {
       setShowAuthModal(false);
       setNameDraft(firstName);
       setLastNameDraft(lastName);
-      setCountryDraft('Maroc');
+      setCountryDraft('');
       setCityDraft('');
       setShowLastNameDraft(false);
       setGenderDraft('');
@@ -1915,9 +1894,10 @@ export default function RezoApp() {
       setPhoneVerifiedDraft(false);
       resetPhoneVerifyUi();
       setShowNameModal(true);
-      // Pré-sélection best effort du pays (géoloc IP) : n'écrase pas un choix déjà fait entre-temps.
+      // Pré-sélection best effort du pays (géoloc IP) : n'écrase pas un choix déjà fait entre-temps,
+      // et ne fait rien si la géolocalisation échoue (pas de pays présupposé par défaut).
       guessCountryFromIP().then((guessed) => {
-        setCountryDraft((current) => (current === 'Maroc' ? guessed : current));
+        if (guessed) setCountryDraft((current) => (current === '' ? guessed : current));
       });
     } catch (err) {
       setAuthError(isNetworkError(err) ? SERVER_UNREACHABLE_MESSAGE : 'Erreur lors de la création du compte, réessaie.');
@@ -2174,7 +2154,10 @@ export default function RezoApp() {
       }
       const name = account.name || '';
       const lastName = account.lastName || '';
-      const country = account.country || 'Maroc';
+      // Pas de pays présupposé pour un compte tout juste créé (voir la géoloc IP juste plus bas) —
+      // `|| ''` seulement, contrairement à submitLogin/confirmPhoneAuthCode où ce champ vient d'un
+      // compte déjà complété par confirmName (repli purement défensif pour données incomplètes/anciennes).
+      const country = account.country || '';
       const city = account.city || '';
       const showLastName = !!account.showLastNamePublicly;
       const showCity = !!account.showCityPublicly;
@@ -2235,7 +2218,7 @@ export default function RezoApp() {
       if (!alreadyComplete) {
         setShowNameModal(true);
         guessCountryFromIP().then((guessed) => {
-          setCountryDraft((current) => (current === 'Maroc' ? guessed : current));
+          if (guessed) setCountryDraft((current) => (current === '' ? guessed : current));
         });
       }
     } catch (err) {
@@ -4097,23 +4080,6 @@ export default function RezoApp() {
         .geo-error {
           padding: 0 24px 10px; color: var(--amber); font-size: 12px;
         }
-        .manual-geo {
-          display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-          margin-top: 8px; color: var(--muted);
-        }
-        .manual-sep { font-size: 11px; }
-        .preset-btn {
-          background: var(--card); border: 1px solid var(--border); color: var(--text);
-          border-radius: 7px; padding: 5px 10px; font-size: 11.5px; cursor: pointer;
-          font-family: 'Inter', sans-serif;
-        }
-        .preset-btn:hover { border-color: var(--live); }
-        .manual-input {
-          width: 70px; background: var(--card); border: 1px solid var(--border);
-          border-radius: 7px; padding: 5px 8px; font-size: 11.5px; color: var(--text);
-          font-family: 'Inter', sans-serif; outline: none;
-        }
-        .manual-input:focus { border-color: var(--live); }
 
         .rezo-chips {
           display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 24px 4px;
@@ -5033,13 +4999,13 @@ export default function RezoApp() {
 
         /* Micro-interactions tactiles : léger retour visuel au tap, comme sur une vraie app mobile */
         .card:active, .chip:active, .join-btn:active,
-        .toggle-btn:active, .geo-btn:active, .preset-btn:active,
+        .toggle-btn:active, .geo-btn:active,
         .pref-chip:active, .gender-btn:active, .segmented-item:active, .recommended-card:active,
         .rate-btn:active, .chat-icon-btn:active, .avatar-upload-btn:active, .modal-submit:active {
           transform: scale(0.96);
         }
         .card, .chip, .join-btn, .toggle-btn, .geo-btn,
-        .preset-btn, .pref-chip, .gender-btn, .segmented-item, .recommended-card,
+        .pref-chip, .gender-btn, .segmented-item, .recommended-card,
         .rate-btn, .chat-icon-btn, .avatar-upload-btn, .modal-submit {
           transition: transform 0.1s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
         }
@@ -5330,30 +5296,6 @@ export default function RezoApp() {
         {locationError && (
           <div className="geo-error">
             {locationError}
-            <div className="manual-geo">
-              <span>Ou choisis une position de test :</span>
-              {MOROCCO_PRESETS.map((p) => (
-                <button key={p.label} className="preset-btn" onClick={() => applyManualCoords(p.coords)}>
-                  {p.label}
-                </button>
-              ))}
-              <span className="manual-sep">ou</span>
-              <input
-                className="manual-input"
-                placeholder="lat"
-                value={manualLat}
-                onChange={(e) => setManualLat(e.target.value)}
-              />
-              <input
-                className="manual-input"
-                placeholder="lng"
-                value={manualLng}
-                onChange={(e) => setManualLng(e.target.value)}
-              />
-              <button className="preset-btn" onClick={() => applyManualCoords({ lat: Number(manualLat), lng: Number(manualLng) })}>
-                Valider
-              </button>
-            </div>
           </div>
         )}
 
@@ -6024,6 +5966,7 @@ export default function RezoApp() {
                 <div className="field">
                   <FieldLabel icon={Globe}>{t('field.country')}</FieldLabel>
                   <select value={countryDraft} onChange={(e) => { setCountryDraft(e.target.value); setCityDraft(''); }}>
+                    <option value="" disabled>{t('field.selectCountry')}</option>
                     {COUNTRIES.map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}
