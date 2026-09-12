@@ -752,12 +752,18 @@ export default function RezoApp() {
   const [userPhoneVerified, setUserPhoneVerified] = useState(false);
   const [userEmail, setUserEmail] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  // 'choose' (téléphone + portes d'entrée) -> 'phone-code' (OTP) ou 'email' (formulaire e-mail).
-  const [authScreen, setAuthScreen] = useState('choose');
-  const [authMode, setAuthMode] = useState('signup'); // 'signup' | 'login' — pour l'écran e-mail
+  // 'email' (Connexion/Inscription, seul point d'entrée maintenant que le choix de méthode est
+  // fusionné dans ces deux écrans) ou 'phone-code' (OTP, laissé en dormant tant que
+  // PHONE_AUTH_ENABLED est à false — plus aucun bouton ne le déclenche pour l'instant).
+  const [authScreen, setAuthScreen] = useState('email');
+  const [authMode, setAuthMode] = useState('signup'); // 'signup' | 'login' — quel écran afficher
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authConfirm, setAuthConfirm] = useState('');
+  const [authFirstName, setAuthFirstName] = useState('');
+  const [authLastName, setAuthLastName] = useState('');
+  const [authAcceptedTerms, setAuthAcceptedTerms] = useState(false);
+  const [authAcceptedMarketing, setAuthAcceptedMarketing] = useState(false);
   const [authShowPassword, setAuthShowPassword] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -1728,11 +1734,15 @@ export default function RezoApp() {
     }
     setPendingAction(() => action);
     if (!userEmail) {
-      setAuthScreen('choose');
+      setAuthScreen('email');
       setAuthMode('signup');
       setAuthEmail('');
       setAuthPassword('');
       setAuthConfirm('');
+      setAuthFirstName('');
+      setAuthLastName('');
+      setAuthAcceptedTerms(false);
+      setAuthAcceptedMarketing(false);
       setAuthShowPassword(false);
       setAuthError(null);
       setAuthPhoneNumber('');
@@ -1765,18 +1775,32 @@ export default function RezoApp() {
     setShowNameModal(true);
   };
 
+  // Au moins 8 caractères, avec au moins 1 lettre et 1 chiffre (règle affichée sur l'écran
+  // d'inscription) — remplace l'ancienne règle "6 caractères minimum".
+  const isPasswordStrongEnough = (pwd) => /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(pwd);
+
   const submitSignup = async () => {
     const email = authEmail.trim().toLowerCase();
+    const firstName = authFirstName.trim();
+    const lastName = authLastName.trim();
+    if (!firstName || !lastName) {
+      setAuthError('Renseigne ton nom et ton prénom.');
+      return;
+    }
     if (!isValidEmail(email)) {
       setAuthError('Adresse e-mail invalide.');
       return;
     }
-    if (authPassword.length < 6) {
-      setAuthError('Le mot de passe doit contenir au moins 6 caractères.');
+    if (!isPasswordStrongEnough(authPassword)) {
+      setAuthError(t('auth.passwordRule'));
       return;
     }
     if (authPassword !== authConfirm) {
       setAuthError('Les mots de passe ne correspondent pas.');
+      return;
+    }
+    if (!authAcceptedTerms) {
+      setAuthError(t('auth.mustAcceptTerms'));
       return;
     }
     setAuthSubmitting(true);
@@ -1789,13 +1813,25 @@ export default function RezoApp() {
         return;
       }
       const passwordHash = await hashPassword(authPassword);
-      accounts[email] = { passwordHash, createdAt: new Date().toISOString(), language };
+      // Champ téléphone visible mais non fonctionnel tant que PHONE_AUTH_ENABLED est à false (voir
+      // src/lib/config.js) : simple donnée de profil facultative capturée à l'inscription, jamais
+      // vérifiée par SMS ici — juste pour éviter à l'utilisateur de la retaper juste après.
+      const fullPhone = authPhoneNumber.trim() ? `${authDialCode}${authPhoneNumber.trim()}` : null;
+      accounts[email] = {
+        passwordHash,
+        createdAt: new Date().toISOString(),
+        language,
+        name: firstName,
+        lastName,
+        phone: fullPhone,
+        acceptedMarketing: authAcceptedMarketing,
+      };
       await saveAccounts(accounts);
       await window.storage.set('rezo-email', email, false);
       setUserEmail(email);
       setShowAuthModal(false);
-      setNameDraft('');
-      setLastNameDraft('');
+      setNameDraft(firstName);
+      setLastNameDraft(lastName);
       setCountryDraft('Maroc');
       setCityDraft('');
       setShowLastNameDraft(false);
@@ -1804,7 +1840,7 @@ export default function RezoApp() {
       setAvatarDraft(null);
       setCoverDraft(null);
       setBioDraft('');
-      setPhoneDraft('');
+      setPhoneDraft(fullPhone || '');
       setPhoneVerifiedDraft(false);
       resetPhoneVerifyUi();
       setShowNameModal(true);
@@ -4579,6 +4615,63 @@ export default function RezoApp() {
         .lang-menu-item.active { background: rgba(var(--live-rgb),0.12); color: var(--live); font-weight: 600; }
         .auth-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 
+        /* Écrans dédiés Connexion/Inscription : thème sombre propre à ce modal, obtenu en
+           redéfinissant localement les variables déjà utilisées par les classes partagées
+           (.field input, .input-with-icon, .auth-oauth-btn, .modal-submit, .auth-separator...)
+           plutôt qu'en dupliquant leurs règles — elles héritent donc automatiquement du nouveau
+           look, sans toucher aux autres modales de l'app (note, filtres, création...) qui restent
+           inchangées. Couleurs REZO demandées : fond très sombre, accent turquoise plutôt que le
+           bleu/orange d'une maquette de référence. */
+        .modal-auth-dark {
+          --ink: #1B1E2A;
+          --card: #12141C;
+          --card-hover: #232838;
+          --border: #2A2E3D;
+          --border-strong: #3A3F52;
+          --text: #FFFFFF;
+          --muted: #9AA1B4;
+          --live: #4FD1C5;
+          --live-rgb: 79, 209, 197;
+          --amber: #F2A65A;
+          --cta-grad: linear-gradient(135deg, #4FD1C5, #38B8AC);
+          background: var(--card);
+          border: none;
+          color: var(--text);
+        }
+        /* "Fond clair" explicitement demandé pour Google/Facebook, même sur ce fond sombre. */
+        .modal-auth-dark .auth-oauth-btn { background: #FFFFFF; color: #17181C; border-color: #FFFFFF; }
+        .modal-auth-dark .auth-oauth-btn:hover { background: #F0F0F0; border-color: #F0F0F0; }
+        .modal-auth-dark .modal-submit:disabled { background: #2A2E3D; color: #6b7280; }
+        .modal-auth-dark .auth-switch-btn { color: var(--muted); font-size: 12.5px; }
+
+        .auth-dark-lang-row { display: flex; justify-content: flex-start; margin-bottom: 14px; }
+        .auth-dark-topbar {
+          position: relative; display: flex; align-items: center; justify-content: center;
+          height: 40px; margin-bottom: 6px;
+        }
+        .auth-dark-back {
+          position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+          width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.08);
+          border: none; color: #fff; display: flex; align-items: center; justify-content: center;
+          cursor: pointer;
+        }
+        [dir="rtl"] .auth-dark-back { left: auto; right: 0; }
+        .auth-dark-title {
+          font-family: 'Space Grotesk', sans-serif; font-size: 21px; font-weight: 700;
+          color: #fff; text-align: center;
+        }
+        .auth-dark-subtitle {
+          color: var(--muted); font-size: 13px; line-height: 1.55; text-align: center; margin: 10px 0 22px;
+        }
+        .auth-checkbox-row {
+          display: flex; align-items: flex-start; gap: 9px; margin: 10px 0; cursor: pointer;
+          font-size: 11.5px; color: var(--muted); line-height: 1.5;
+        }
+        .auth-checkbox-row input[type="checkbox"] {
+          flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; accent-color: var(--live); cursor: pointer;
+        }
+        .auth-switch-link { text-decoration: underline; font-weight: 600; color: var(--live); }
+
         .invite-preview {
           background: var(--ink); border: 1px solid var(--border); border-radius: 8px;
           padding: 10px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.4;
@@ -5341,10 +5434,10 @@ export default function RezoApp() {
 
       {showAuthModal && (
         <div className="modal-overlay">
-          <div className="modal">
-            {authScreen === 'choose' && (
+          <div className="modal modal-auth-dark">
+            {authScreen === 'email' && (
               <>
-                <div className="auth-header-row">
+                <div className="auth-dark-lang-row">
                   <LanguageMenu
                     language={language}
                     onChange={setLanguage}
@@ -5353,85 +5446,184 @@ export default function RezoApp() {
                   />
                 </div>
 
-                <div className="modal-header">
-                  <div className="modal-title">
-                    <Lock size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />
-                    {t('auth.title')}
-                  </div>
-                  <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
+                <div className="auth-dark-topbar">
+                  <button type="button" className="auth-dark-back" onClick={() => setShowAuthModal(false)} aria-label={t('auth.back')}>
+                    <ChevronRight size={18} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)' }} />
+                  </button>
+                  <div className="auth-dark-title">{authMode === 'signup' ? t('auth.signupTitle') : t('auth.loginTitle')}</div>
                 </div>
-
-                <div className="auth-intro">
-                  {t('auth.intro')}
+                <div className="auth-dark-subtitle">
+                  {authMode === 'signup' ? t('auth.signupSubtitle') : t('auth.loginSubtitle')}
                 </div>
 
                 {authError && <div className="auth-error" role="alert">{authError}</div>}
 
-                {PHONE_AUTH_ENABLED && (
-                  <>
+                {authMode === 'signup' && (
+                  <div className="field-row">
                     <div className="field">
-                      <label>{t('auth.phoneLabel')}</label>
-                      <div className="phone-dial-row">
-                        <select
-                          className="dial-code-select"
-                          value={authDialCode}
-                          onChange={(e) => {
-                            const match = DIAL_CODES.find((d) => d.code === e.target.value);
-                            setAuthDialCode(e.target.value);
-                            if (match) setAuthDialCountry(match.country);
-                          }}
-                        >
-                          {DIAL_CODES.map((d) => (
-                            <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
-                          ))}
-                        </select>
-                        <input
-                          type="tel"
-                          value={authPhoneNumber}
-                          onChange={(e) => setAuthPhoneNumber(e.target.value)}
-                          placeholder="6 12 34 56 78"
-                          onKeyDown={(e) => e.key === 'Enter' && requestPhoneAuthCode('sms')}
-                        />
-                      </div>
+                      <label>{t('field.lastName')}</label>
+                      <input
+                        autoFocus
+                        value={authLastName}
+                        onChange={(e) => setAuthLastName(e.target.value)}
+                        placeholder="El Amrani"
+                      />
                     </div>
-
-                    <div className="auth-legal-text">
-                      {interpolateNodes(t('auth.legalText'), {
-                        privacy: (
-                          <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyPolicy'))}>
-                            {t('auth.privacyPolicy')}
-                          </button>
-                        ),
-                        terms: (
-                          <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.termsOfUse'))}>
-                            {t('auth.termsOfUse')}
-                          </button>
-                        ),
-                      })}
+                    <div className="field">
+                      <label>{t('field.firstName')}</label>
+                      <input
+                        value={authFirstName}
+                        onChange={(e) => setAuthFirstName(e.target.value)}
+                        placeholder="Yassine"
+                      />
                     </div>
+                  </div>
+                )}
 
+                <div className="field">
+                  <label>{t('auth.emailLabel')}</label>
+                  <div className="input-with-icon">
+                    <input
+                      type="email"
+                      autoFocus={authMode === 'login'}
+                      autoComplete="email"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="toi@exemple.com"
+                      onKeyDown={(e) => e.key === 'Enter' && authMode === 'login' && submitLogin()}
+                    />
+                    <Mail size={14} color="var(--muted)" />
+                  </div>
+                  {authMode === 'signup' && <span className="field-hint">{t('auth.emailHelp')}</span>}
+                </div>
+
+                <div className="field">
+                  <label>{t('auth.passwordLabel')}</label>
+                  <div className="input-with-icon">
+                    <input
+                      type={authShowPassword ? 'text' : 'password'}
+                      autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder={authMode === 'signup' ? 'Au moins 8 caractères' : 'Ton mot de passe'}
+                      onKeyDown={(e) => e.key === 'Enter' && authMode === 'login' && submitLogin()}
+                    />
                     <button
                       type="button"
-                      className="phone-channel-btn whatsapp"
-                      disabled={authPhoneBusy}
-                      onClick={() => requestPhoneAuthCode('whatsapp')}
+                      className="input-icon-btn"
+                      onClick={() => setAuthShowPassword((v) => !v)}
+                      aria-label={authShowPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
                     >
-                      {authPhoneBusy && authPhoneChannel === 'whatsapp' ? <Loader2 size={15} className="spin" /> : <MessageCircle size={15} />}
-                      {t('auth.whatsapp')}
+                      {authShowPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
-                    <button
-                      type="button"
-                      className="phone-channel-btn"
-                      disabled={authPhoneBusy}
-                      onClick={() => requestPhoneAuthCode('sms')}
-                    >
-                      {authPhoneBusy && authPhoneChannel === 'sms' ? <Loader2 size={15} className="spin" /> : <Phone size={15} />}
-                      {t('auth.sms')}
-                    </button>
+                  </div>
+                  {authMode === 'signup' && <span className="field-hint">{t('auth.passwordRule')}</span>}
+                </div>
 
-                    <div className="auth-separator"><span>{t('auth.orWith')}</span></div>
+                {authMode === 'signup' && (
+                  <div className="field">
+                    <label>{t('auth.confirmPasswordLabel')}</label>
+                    <div className={`input-with-icon ${authConfirm && authConfirm !== authPassword ? 'mismatch' : ''}`}>
+                      <input
+                        type={authShowPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={authConfirm}
+                        onChange={(e) => setAuthConfirm(e.target.value)}
+                        placeholder="Retape ton mot de passe"
+                        onKeyDown={(e) => e.key === 'Enter' && submitSignup()}
+                      />
+                    </div>
+                    {authConfirm && authConfirm !== authPassword && (
+                      <span style={{ fontSize: 11, color: 'var(--amber)' }}>{t('auth.passwordMismatch')}</span>
+                    )}
+                  </div>
+                )}
+
+                {authMode === 'signup' && (
+                  <div className="field">
+                    <label>{t('field.phoneOptional')}</label>
+                    <div className="phone-dial-row">
+                      <select
+                        className="dial-code-select"
+                        value={authDialCode}
+                        onChange={(e) => {
+                          const match = DIAL_CODES.find((d) => d.code === e.target.value);
+                          setAuthDialCode(e.target.value);
+                          if (match) setAuthDialCountry(match.country);
+                        }}
+                      >
+                        {DIAL_CODES.map((d) => (
+                          <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="tel"
+                        value={authPhoneNumber}
+                        onChange={(e) => setAuthPhoneNumber(e.target.value)}
+                        placeholder="6 12 34 56 78"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {authMode === 'login' && (
+                  <button
+                    type="button"
+                    className="auth-forgot-link"
+                    onClick={() => showLegalPlaceholder(t('auth.forgotPassword'))}
+                  >
+                    {t('auth.forgotPassword')}
+                  </button>
+                )}
+
+                {authMode === 'signup' && (
+                  <>
+                    <label className="auth-checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={authAcceptedTerms}
+                        onChange={(e) => setAuthAcceptedTerms(e.target.checked)}
+                      />
+                      <span>
+                        {interpolateNodes(t('auth.termsCheckbox'), {
+                          terms: (
+                            <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.termsOfUse'))}>
+                              {t('auth.termsOfUse')}
+                            </button>
+                          ),
+                          privacy: (
+                            <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyPolicy'))}>
+                              {t('auth.privacyPolicy')}
+                            </button>
+                          ),
+                        })}
+                      </span>
+                    </label>
+                    <label className="auth-checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={authAcceptedMarketing}
+                        onChange={(e) => setAuthAcceptedMarketing(e.target.checked)}
+                      />
+                      <span>{t('auth.marketingCheckbox')}</span>
+                    </label>
                   </>
                 )}
+
+                <button
+                  className="modal-submit"
+                  disabled={
+                    authSubmitting ||
+                    !authEmail.trim() ||
+                    !authPassword ||
+                    (authMode === 'signup' && (!authConfirm || !authFirstName.trim() || !authLastName.trim() || !authAcceptedTerms))
+                  }
+                  onClick={authMode === 'signup' ? submitSignup : submitLogin}
+                >
+                  {authSubmitting ? '…' : authMode === 'signup' ? t('auth.signupSubmit') : t('auth.login')}
+                </button>
+
+                <div className="auth-separator"><span>{t('auth.orWith')}</span></div>
 
                 <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
                   <GoogleIcon /> {t('auth.continueGoogle')}
@@ -5439,12 +5631,22 @@ export default function RezoApp() {
                 <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Facebook')}>
                   <FacebookIcon /> {t('auth.continueFacebook')}
                 </button>
+
                 <button
                   type="button"
-                  className="auth-oauth-btn"
-                  onClick={() => { setAuthScreen('email'); setAuthMode('login'); setAuthError(null); }}
+                  className="auth-switch-btn"
+                  onClick={() => {
+                    setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'));
+                    setAuthError(null);
+                  }}
                 >
-                  <Mail size={18} color="var(--muted)" /> {t('auth.continueEmail')}
+                  {interpolateNodes(authMode === 'signup' ? t('auth.hasAccount') : t('auth.noAccount'), {
+                    action: (
+                      <span className="auth-switch-link">
+                        {authMode === 'signup' ? t('auth.loginLink') : t('auth.createAccount')}
+                      </span>
+                    ),
+                  })}
                 </button>
               </>
             )}
@@ -5459,7 +5661,7 @@ export default function RezoApp() {
                   <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
                 </div>
 
-                <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('choose'); setAuthError(null); }}>
+                <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('email'); setAuthError(null); }}>
                   <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)', verticalAlign: '-2px' }} /> {t('auth.back')}
                 </button>
 
@@ -5501,141 +5703,6 @@ export default function RezoApp() {
                   onClick={() => requestPhoneAuthCode(authPhoneChannel)}
                 >
                   {t('auth.resendCode')}
-                </button>
-              </>
-            )}
-
-            {authScreen === 'email' && (
-              <>
-                <div className="modal-header">
-                  <div className="modal-title">
-                    <Mail size={15} style={{ verticalAlign: '-2px', marginInlineEnd: 7, color: 'var(--live)' }} />
-                    {authMode === 'signup' ? t('auth.createAccount') : t('auth.emailLoginTitle')}
-                  </div>
-                  <button className="modal-close" onClick={() => setShowAuthModal(false)}><X size={18} /></button>
-                </div>
-
-                <button type="button" className="auth-back-link" onClick={() => { setAuthScreen('choose'); setAuthError(null); }}>
-                  <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'none' : 'rotate(180deg)', verticalAlign: '-2px' }} /> {t('auth.back')}
-                </button>
-
-                {authMode === 'signup' && (
-                  <div className="auth-intro">
-                    {t('auth.intro')}
-                  </div>
-                )}
-
-                <div className="field">
-                  <label>{t('auth.emailLabel')}</label>
-                  <div className="input-with-icon">
-                    <Mail size={14} color="var(--muted)" />
-                    <input
-                      type="email"
-                      autoFocus
-                      autoComplete="email"
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      placeholder="toi@exemple.com"
-                      onKeyDown={(e) => e.key === 'Enter' && (authMode === 'signup' ? submitSignup() : submitLogin())}
-                    />
-                  </div>
-                </div>
-
-                <div className="field">
-                  <label>{t('auth.passwordLabel')}</label>
-                  <div className="input-with-icon">
-                    <Lock size={14} color="var(--muted)" />
-                    <input
-                      type={authShowPassword ? 'text' : 'password'}
-                      autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                      value={authPassword}
-                      onChange={(e) => setAuthPassword(e.target.value)}
-                      placeholder="Au moins 6 caractères"
-                      onKeyDown={(e) => e.key === 'Enter' && authMode === 'login' && submitLogin()}
-                    />
-                    <button
-                      type="button"
-                      className="input-icon-btn"
-                      onClick={() => setAuthShowPassword((v) => !v)}
-                      aria-label={authShowPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-                    >
-                      {authShowPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
-                  </div>
-                </div>
-
-                {authMode === 'signup' && (
-                  <div className="field">
-                    <label>{t('auth.confirmPasswordLabel')}</label>
-                    <div className={`input-with-icon ${authConfirm && authConfirm !== authPassword ? 'mismatch' : ''}`}>
-                      <Lock size={14} color="var(--muted)" />
-                      <input
-                        type={authShowPassword ? 'text' : 'password'}
-                        autoComplete="new-password"
-                        value={authConfirm}
-                        onChange={(e) => setAuthConfirm(e.target.value)}
-                        placeholder="Retape ton mot de passe"
-                        onKeyDown={(e) => e.key === 'Enter' && submitSignup()}
-                      />
-                    </div>
-                    {authConfirm && authConfirm !== authPassword && (
-                      <span style={{ fontSize: 11, color: 'var(--amber)' }}>Les mots de passe ne correspondent pas.</span>
-                    )}
-                  </div>
-                )}
-
-                {authMode === 'login' && (
-                  <button
-                    type="button"
-                    className="auth-forgot-link"
-                    onClick={() => showLegalPlaceholder(t('auth.forgotPassword'))}
-                  >
-                    {t('auth.forgotPassword')}
-                  </button>
-                )}
-
-                {authError && (
-                  <div className="auth-error" role="alert">
-                    {authError}
-                  </div>
-                )}
-
-                <button
-                  className="modal-submit"
-                  disabled={
-                    authSubmitting ||
-                    !authEmail.trim() ||
-                    !authPassword ||
-                    (authMode === 'signup' && !authConfirm)
-                  }
-                  onClick={authMode === 'signup' ? submitSignup : submitLogin}
-                >
-                  {authSubmitting ? '…' : authMode === 'signup' ? t('auth.createAccount') : t('auth.login')}
-                </button>
-
-                <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
-                  <GoogleIcon /> {t('auth.googleLogin')}
-                </button>
-
-                <div className="auth-legal-text">
-                  {interpolateNodes(t('auth.dataMention'), {
-                    link: (
-                      <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyStatement'))}>
-                        {t('auth.privacyStatement')}
-                      </button>
-                    ),
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  className="auth-switch-btn"
-                  onClick={() => {
-                    setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'));
-                    setAuthError(null);
-                  }}
-                >
-                  {authMode === 'signup' ? t('auth.hasAccount') : t('auth.noAccount')}
                 </button>
               </>
             )}

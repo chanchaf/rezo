@@ -57,6 +57,8 @@ function Root() {
     return (
       <WebAuth
         language={language}
+        setLanguage={setLanguage}
+        dir={dir}
         t={t}
         initialMode={authMode}
         onBack={() => setWebView('landing')}

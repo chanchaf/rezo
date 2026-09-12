@@ -210,6 +210,15 @@ de revenir" plus bas). Il lit/écrit dans la MÊME collection Firestore via
    modifiables par n'importe quel utilisateur authentifié anonymement — pas
    de règles par-utilisateur avant une vraie mise en production.
 
+   ⚠️ Tout appel Firestore doit `await authReady` avant de lire/écrire (voir
+   `storagePolyfill.js` et `server/firebaseClient.js`) — y compris
+   `src/lib/webAuth.js`, qui appelle Firestore directement (sans passer par
+   le polyfill) et l'oubliait initialement : la connexion/inscription web
+   pouvait alors se figer silencieusement (ni succès ni message d'erreur) en
+   cas de course entre l'écriture du compte et la fin de l'authentification
+   anonyme. Corrigé en ajoutant le même `await authReady` dans
+   `loadAccounts`/`saveAccounts` de `webAuth.js`.
+
 Sans `.env.local`, l'app utilise une config Firebase par défaut codée en dur
 (le projet de développement d'origine) — pratique pour un premier essai,
 mais à remplacer par votre propre projet dès que vous continuez ce travail.
@@ -219,8 +228,23 @@ mais à remplacer par votre propre projet dès que vous continuez ce travail.
 Avant de pouvoir créer/rejoindre une rencontre, discuter, inviter ou noter,
 l'utilisateur doit :
 
-1. **S'authentifier**, avec plusieurs portes d'entrée (écran en deux temps,
-   façon Glovo) :
+1. **S'authentifier**, via deux écrans dédiés — **Connexion** et **Créez
+   votre compte** — au thème sombre/turquoise propre à REZO (fond `#12141C`,
+   accent `#4FD1C5`, ambre `#F2A65A`), identiques en structure sur mobile
+   (`App.jsx`, classe `.modal-auth-dark`) et sur web (`WebAuth.jsx`, mêmes
+   classes `.webauth-*` dupliquées avec les mêmes couleurs — contrainte
+   d'isolation totale entre les deux fichiers, voir plus haut) :
+   - **Connexion** : e-mail + mot de passe, lien "Mot de passe oublié ?",
+     puis Google/Facebook en repli.
+   - **Créez votre compte** : nom + prénom (obligatoires), e-mail, mot de
+     passe (règle affichée : au moins 8 caractères, 1 lettre, 1 chiffre) +
+     confirmation, numéro de téléphone (visible mais facultatif et non
+     vérifié tant que `PHONE_AUTH_ENABLED` est à `false`, voir plus bas),
+     case à cocher obligatoire (conditions générales + politique de
+     confidentialité, liens cliquables) et case optionnelle (e-mails
+     marketing), puis Google/Facebook en repli.
+
+   Portes d'entrée disponibles derrière ces deux écrans :
    - **Téléphone** (méthode principale à terme) : préfixe pays (drapeau,
      présélectionné via géolocalisation IP) + numéro, puis code reçu par SMS
      ou WhatsApp. Réutilise le flux de vérification déjà en place pour le
@@ -245,7 +269,9 @@ l'utilisateur doit :
      prototype — mot de passe haché côté client via
      `crypto.subtle.digest('SHA-256', …)` avant stockage dans le registre
      partagé `accounts` (`window.storage`, `shared: true`) (voir
-     `hashPassword` dans `App.jsx`).
+     `hashPassword`/`isPasswordStrongEnough` dans `App.jsx`). Chaque compte
+     stocke aussi `name`/`lastName`/`phone`/`acceptedMarketing`, capturés dès
+     l'inscription plutôt qu'à l'étape suivante de complétion de profil.
    - **Google / Facebook** : boutons présents (façon Glovo) mais non
      connectés — nécessiteraient de vraies applications OAuth (client ID
      Google, App ID + secret Facebook) qu'on ne peut pas improviser dans ce

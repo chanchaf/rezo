@@ -9,7 +9,7 @@
  * (même algorithme de hash, même forme de compte, mêmes clés) pour qu'un compte créé ou connecté
  * ici soit repris correctement par App.jsx au rechargement (voir handoff() ci-dessous).
  */
-import { db } from './firebase.js';
+import { db, authReady } from './firebase.js';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const ACCOUNTS_KEY = 'accounts';
@@ -29,6 +29,12 @@ export function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim());
 }
 
+// Même règle que App.jsx (voir isPasswordStrongEnough dans App.jsx) : au moins 8 caractères, au
+// moins une lettre et un chiffre — dupliquée ici pour la même raison que le reste du fichier.
+export function isPasswordStrongEnough(password) {
+  return /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(password || '');
+}
+
 export async function hashPassword(password) {
   const bytes = new TextEncoder().encode(password);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -39,6 +45,7 @@ export async function hashPassword(password) {
 
 export async function loadAccounts() {
   try {
+    await authReady;
     const snap = await getDoc(doc(db, 'kv', ACCOUNTS_KEY));
     if (!snap.exists()) return {};
     return JSON.parse(snap.data().value || '{}');
@@ -48,6 +55,7 @@ export async function loadAccounts() {
 }
 
 export async function saveAccounts(accounts) {
+  await authReady;
   await setDoc(doc(db, 'kv', ACCOUNTS_KEY), { value: JSON.stringify(accounts) });
 }
 
@@ -105,14 +113,30 @@ export function applySessionToLocalStorage(identifier, account, extra = {}) {
   writePersonal(personal);
 }
 
-export async function createEmailAccount(email, password, language) {
+// `profile` reprend les champs capturés dès l'inscription côté App.jsx (voir submitSignup) :
+// firstName/lastName obligatoires, phone facultatif (visible mais non vérifié tant que
+// PHONE_AUTH_ENABLED est à false), acceptedMarketing pour la case optionnelle.
+export async function createEmailAccount(email, password, language, profile = {}) {
   const trimmed = email.trim().toLowerCase();
+  const firstName = (profile.firstName || '').trim();
+  const lastName = (profile.lastName || '').trim();
+  if (!firstName || !lastName) throw new Error('Renseigne ton nom et ton prénom.');
   if (!isValidEmail(trimmed)) throw new Error('Adresse e-mail invalide.');
-  if (password.length < 6) throw new Error('Le mot de passe doit contenir au moins 6 caractères.');
+  if (!isPasswordStrongEnough(password)) {
+    throw new Error('Au moins 8 caractères, incluant 1 lettre et 1 chiffre.');
+  }
   const accounts = await loadAccounts();
   if (accounts[trimmed]) throw new Error('Un compte existe déjà avec cette adresse.');
   const passwordHash = await hashPassword(password);
-  accounts[trimmed] = { passwordHash, createdAt: new Date().toISOString(), language };
+  accounts[trimmed] = {
+    passwordHash,
+    createdAt: new Date().toISOString(),
+    language,
+    name: firstName,
+    lastName,
+    phone: profile.phone || null,
+    acceptedMarketing: !!profile.acceptedMarketing,
+  };
   await saveAccounts(accounts);
   applySessionToLocalStorage(trimmed, accounts[trimmed]);
   return trimmed;
