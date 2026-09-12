@@ -275,6 +275,14 @@ const REZO_HOST_NAME = 'Équipe REZO';
 // (jamais réaffiché ailleurs dans l'UI), pas le libellé, pour rester indépendant de la langue.
 const REPORT_REASONS = ['spam', 'inappropriate', 'scam', 'fakeProfile', 'other'];
 
+// Retiré temporairement de l'écran de connexion/inscription (numéro de téléphone + SMS/WhatsApp) :
+// nécessite le plan payant Blaze côté Firebase pour l'envoi réel de SMS, pas encore activé. Le code
+// (champ pays/téléphone, requestPhoneAuthCode, confirmPhoneAuthCode...) reste en place intact,
+// juste caché derrière ce flag — pour le réactiver plus tard (le jour où le SMS est payé), il suffit
+// de repasser ce booléen à true, sans rien reconstruire. Même flag dupliqué dans WebAuth.jsx (écran
+// équivalent côté web) pour rester cohérent des deux côtés.
+const PHONE_AUTH_ENABLED = false;
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -5365,67 +5373,71 @@ export default function RezoApp() {
 
                 {authError && <div className="auth-error" role="alert">{authError}</div>}
 
-                <div className="field">
-                  <label>{t('auth.phoneLabel')}</label>
-                  <div className="phone-dial-row">
-                    <select
-                      className="dial-code-select"
-                      value={authDialCode}
-                      onChange={(e) => {
-                        const match = DIAL_CODES.find((d) => d.code === e.target.value);
-                        setAuthDialCode(e.target.value);
-                        if (match) setAuthDialCountry(match.country);
-                      }}
+                {PHONE_AUTH_ENABLED && (
+                  <>
+                    <div className="field">
+                      <label>{t('auth.phoneLabel')}</label>
+                      <div className="phone-dial-row">
+                        <select
+                          className="dial-code-select"
+                          value={authDialCode}
+                          onChange={(e) => {
+                            const match = DIAL_CODES.find((d) => d.code === e.target.value);
+                            setAuthDialCode(e.target.value);
+                            if (match) setAuthDialCountry(match.country);
+                          }}
+                        >
+                          {DIAL_CODES.map((d) => (
+                            <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="tel"
+                          value={authPhoneNumber}
+                          onChange={(e) => setAuthPhoneNumber(e.target.value)}
+                          placeholder="6 12 34 56 78"
+                          onKeyDown={(e) => e.key === 'Enter' && requestPhoneAuthCode('sms')}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="auth-legal-text">
+                      {interpolateNodes(t('auth.legalText'), {
+                        privacy: (
+                          <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyPolicy'))}>
+                            {t('auth.privacyPolicy')}
+                          </button>
+                        ),
+                        terms: (
+                          <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.termsOfUse'))}>
+                            {t('auth.termsOfUse')}
+                          </button>
+                        ),
+                      })}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="phone-channel-btn whatsapp"
+                      disabled={authPhoneBusy}
+                      onClick={() => requestPhoneAuthCode('whatsapp')}
                     >
-                      {DIAL_CODES.map((d) => (
-                        <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="tel"
-                      value={authPhoneNumber}
-                      onChange={(e) => setAuthPhoneNumber(e.target.value)}
-                      placeholder="6 12 34 56 78"
-                      onKeyDown={(e) => e.key === 'Enter' && requestPhoneAuthCode('sms')}
-                    />
-                  </div>
-                </div>
+                      {authPhoneBusy && authPhoneChannel === 'whatsapp' ? <Loader2 size={15} className="spin" /> : <MessageCircle size={15} />}
+                      {t('auth.whatsapp')}
+                    </button>
+                    <button
+                      type="button"
+                      className="phone-channel-btn"
+                      disabled={authPhoneBusy}
+                      onClick={() => requestPhoneAuthCode('sms')}
+                    >
+                      {authPhoneBusy && authPhoneChannel === 'sms' ? <Loader2 size={15} className="spin" /> : <Phone size={15} />}
+                      {t('auth.sms')}
+                    </button>
 
-                <div className="auth-legal-text">
-                  {interpolateNodes(t('auth.legalText'), {
-                    privacy: (
-                      <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyPolicy'))}>
-                        {t('auth.privacyPolicy')}
-                      </button>
-                    ),
-                    terms: (
-                      <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.termsOfUse'))}>
-                        {t('auth.termsOfUse')}
-                      </button>
-                    ),
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  className="phone-channel-btn whatsapp"
-                  disabled={authPhoneBusy}
-                  onClick={() => requestPhoneAuthCode('whatsapp')}
-                >
-                  {authPhoneBusy && authPhoneChannel === 'whatsapp' ? <Loader2 size={15} className="spin" /> : <MessageCircle size={15} />}
-                  {t('auth.whatsapp')}
-                </button>
-                <button
-                  type="button"
-                  className="phone-channel-btn"
-                  disabled={authPhoneBusy}
-                  onClick={() => requestPhoneAuthCode('sms')}
-                >
-                  {authPhoneBusy && authPhoneChannel === 'sms' ? <Loader2 size={15} className="spin" /> : <Phone size={15} />}
-                  {t('auth.sms')}
-                </button>
-
-                <div className="auth-separator"><span>{t('auth.orWith')}</span></div>
+                    <div className="auth-separator"><span>{t('auth.orWith')}</span></div>
+                  </>
+                )}
 
                 <button type="button" className="auth-oauth-btn" onClick={() => handleOAuthStub('Google')}>
                   <GoogleIcon /> {t('auth.continueGoogle')}

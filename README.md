@@ -221,13 +221,24 @@ l'utilisateur doit :
 
 1. **S'authentifier**, avec plusieurs portes d'entrée (écran en deux temps,
    façon Glovo) :
-   - **Téléphone** (méthode principale) : préfixe pays (drapeau, présélectionné
-     via géolocalisation IP) + numéro, puis code reçu par SMS ou WhatsApp.
-     Réutilise le flux de vérification déjà en place pour le badge "Vérifié"
-     (voir plus bas) — le numéro complet sert lui-même d'identifiant de
-     compte. ⚠️ Aucun fournisseur SMS/WhatsApp réel n'est branché : le code
-     est affiché directement à l'écran ("code de démonstration"), comme pour
-     la vérification de téléphone dans "Modifier le profil".
+   - **Téléphone** (méthode principale à terme) : préfixe pays (drapeau,
+     présélectionné via géolocalisation IP) + numéro, puis code reçu par SMS
+     ou WhatsApp. Réutilise le flux de vérification déjà en place pour le
+     badge "Vérifié" (voir plus bas) — le numéro complet sert lui-même
+     d'identifiant de compte. ⚠️ Aucun fournisseur SMS/WhatsApp réel n'est
+     branché : le code est affiché directement à l'écran ("code de
+     démonstration"), comme pour la vérification de téléphone dans
+     "Modifier le profil".
+
+     🔒 **Retiré temporairement de l'écran de connexion/inscription**
+     (mobile et web) derrière le flag `PHONE_AUTH_ENABLED = false` (dupliqué
+     dans `App.jsx` et `WebAuth.jsx`) : l'envoi réel de SMS nécessiterait le
+     plan payant Firebase Blaze, pas encore activé. Tout le code (champ
+     pays/téléphone, `requestPhoneAuthCode`/`confirmPhoneAuthCode`,
+     `submitPhoneRequest`/`submitPhoneConfirm`) reste intact — repasser le
+     flag à `true` des deux côtés suffit à le réactiver, sans rien
+     reconstruire. En attendant, l'écran ne propose que Google/Facebook/
+     e-mail.
    - **E-mail + mot de passe** : entièrement réel dans les limites d'un
      prototype — mot de passe haché côté client via
      `crypto.subtle.digest('SHA-256', …)` avant stockage dans le registre

@@ -264,7 +264,7 @@ const fr = {
   'settings.language': 'Langue',
   'settings.logout': 'Se déconnecter',
 
-  'auth.title': 'Connexion',
+  'auth.title': 'Connexion ou inscription',
   'auth.intro': 'Connecte-toi pour organiser et rejoindre des rencontres. Tu complèteras ton profil juste après.',
   'auth.phoneLabel': 'Numéro de téléphone',
   'auth.legalText': "Le site est protégé par reCAPTCHA et la {privacy} et les {terms} s'appliquent.",
@@ -721,7 +721,7 @@ const en = {
   'settings.language': 'Language',
   'settings.logout': 'Log out',
 
-  'auth.title': 'Sign in',
+  'auth.title': 'Sign in or sign up',
   'auth.intro': "Sign in to organize and join meetups. You'll complete your profile right after.",
   'auth.phoneLabel': 'Phone number',
   'auth.legalText': "This site is protected by reCAPTCHA and the {privacy} and {terms} apply.",
@@ -1177,7 +1177,7 @@ const ar = {
   'settings.language': 'اللغة',
   'settings.logout': 'تسجيل الخروج',
 
-  'auth.title': 'تسجيل الدخول',
+  'auth.title': 'تسجيل الدخول أو إنشاء حساب',
   'auth.intro': 'سجّل الدخول لتنظيم اللقاءات والانضمام إليها. ستُكمل ملفك الشخصي بعد ذلك مباشرة.',
   'auth.phoneLabel': 'رقم الهاتف',
   'auth.legalText': 'هذا الموقع محمي بواسطة reCAPTCHA وتنطبق {privacy} و{terms}.',

@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
 import { createEmailAccount, loginEmailAccount, completePhoneLogin, DIAL_CODES } from './lib/webAuth.js';
 
+// Même flag que App.jsx (dupliqué ici pour rester isolé de App.jsx, voir la contrainte
+// d'isolation) : retire temporairement le téléphone/SMS tant que le plan Blaze n'est pas activé.
+// À repasser à true quand le SMS payant est prêt — le code reste intact en dessous.
+const PHONE_AUTH_ENABLED = false;
+
 // Écran de connexion/inscription dédié au web (voir Landing.jsx et la contrainte d'isolation totale
 // vis-à-vis de App.jsx dans main.jsx). Reproduit le même choix de méthodes que le flux mobile
 // (téléphone SMS/WhatsApp, e-mail, Google/Facebook) sans remplacer ni modifier ce flux mobile —
@@ -100,31 +105,35 @@ export default function WebAuth({ language, t, initialMode = 'login', onBack, on
             <p className="webauth-intro">{t('auth.intro')}</p>
             {error && <div className="webauth-error">{error}</div>}
 
-            <div className="field">
-              <label>{t('auth.phoneLabel')}</label>
-              <div className="webauth-phone-row">
-                <select value={dialCode} onChange={(e) => setDialCode(e.target.value)}>
-                  {DIAL_CODES.map((d) => (
-                    <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
-                  ))}
-                </select>
-                <input
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  placeholder="6 12 34 56 78"
-                  onKeyDown={(e) => e.key === 'Enter' && submitPhoneRequest('sms')}
-                />
-              </div>
-            </div>
-            <button type="button" className="webauth-btn webauth-btn-outline" disabled={busy} onClick={() => submitPhoneRequest('whatsapp')}>
-              {t('auth.whatsapp')}
-            </button>
-            <button type="button" className="webauth-btn webauth-btn-outline" disabled={busy} onClick={() => submitPhoneRequest('sms')}>
-              {t('auth.sms')}
-            </button>
+            {PHONE_AUTH_ENABLED && (
+              <>
+                <div className="field">
+                  <label>{t('auth.phoneLabel')}</label>
+                  <div className="webauth-phone-row">
+                    <select value={dialCode} onChange={(e) => setDialCode(e.target.value)}>
+                      {DIAL_CODES.map((d) => (
+                        <option key={d.country} value={d.code}>{d.flag} {d.code}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="tel"
+                      value={phoneNumber}
+                      onChange={(e) => setPhoneNumber(e.target.value)}
+                      placeholder="6 12 34 56 78"
+                      onKeyDown={(e) => e.key === 'Enter' && submitPhoneRequest('sms')}
+                    />
+                  </div>
+                </div>
+                <button type="button" className="webauth-btn webauth-btn-outline" disabled={busy} onClick={() => submitPhoneRequest('whatsapp')}>
+                  {t('auth.whatsapp')}
+                </button>
+                <button type="button" className="webauth-btn webauth-btn-outline" disabled={busy} onClick={() => submitPhoneRequest('sms')}>
+                  {t('auth.sms')}
+                </button>
 
-            <div className="webauth-sep"><span>ou avec</span></div>
+                <div className="webauth-sep"><span>ou avec</span></div>
+              </>
+            )}
 
             <button type="button" className="webauth-btn webauth-btn-outline" onClick={() => oauthStub('Google')}>{t('auth.continueGoogle')}</button>
             <button type="button" className="webauth-btn webauth-btn-outline" onClick={() => oauthStub('Facebook')}>{t('auth.continueFacebook')}</button>
