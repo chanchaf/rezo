@@ -462,6 +462,27 @@ function formatDistance(km) {
   return `${km.toFixed(km < 10 ? 1 : 0)} km`;
 }
 
+// Horizon temporel d'une rencontre (0 = aujourd'hui, 1 = demain, 2 = cette semaine, 3 = plus tard) —
+// voir byHorizonThenDistance et la section "Activités proches de moi" (nearMeGroups), qui affichent
+// les rencontres proches ET bientôt avant celles proches mais lointaines dans le temps.
+function timeHorizon(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(d) - startOfDay(now)) / 86400000);
+  if (dayDiff <= 0) return 0;
+  if (dayDiff === 1) return 1;
+  if (dayDiff <= 7) return 2;
+  return 3;
+}
+
+const HORIZONS = [
+  { id: 'today', labelKey: 'horizon.today' },
+  { id: 'tomorrow', labelKey: 'horizon.tomorrow' },
+  { id: 'week', labelKey: 'horizon.week' },
+  { id: 'later', labelKey: 'horizon.later' },
+];
+
 // Transforme un résultat brut Nominatim (OpenStreetMap) en suggestion affichable : nom principal
 // (établissement/rue) + contexte secondaire (quartier, ville), avec les coordonnées exactes.
 function toGeoSuggestion(r) {
@@ -1256,12 +1277,9 @@ export default function RezoApp() {
       } catch (err) {
         // not verified yet
       }
-      try {
-        const res = await window.storage.get('rezo-coords', false);
-        if (res && res.value) setUserCoords(JSON.parse(res.value));
-      } catch (err) {
-        // no coords stored yet
-      }
+      // Pas de restauration de userCoords au montage : une position GPS n'est jamais mise en cache
+      // d'une session à l'autre (voir activateNearMe) — seule "near me" activé/désactivé persiste
+      // (ci-dessous), la position elle-même est toujours redemandée fraîche au prochain clic.
       try {
         const res = await window.storage.get('rezo-near-me-active', false);
         if (res && res.value === 'true') setNearMeActive(true);
@@ -1670,53 +1688,54 @@ export default function RezoApp() {
     }
   }, [meetups, userName, now, ratingMeetup, dismissedRatingIds]);
 
-  // Le GPS seul n'est pas fiable (permission refusée, contexte restreint...) : la source principale
-  // de proximité est désormais la ville déclarée au profil (toujours disponible une fois
-  // renseignée), le GPS restant un bonus silencieux pour affiner le tri par distance réelle à
-  // l'intérieur du groupe "même ville" quand il est accordé.
+  // La position GPS réelle et actuelle de l'appareil est la source principale : une vraie demande
+  // de permission est relancée à CHAQUE activation (jamais de position mise en cache d'une session
+  // précédente ou d'un autre jour — voir maximumAge: 0, et userCoords n'est jamais persisté,
+  // seulement gardé en mémoire pour la session en cours, voir l'effet de montage). Si l'utilisateur
+  // s'est déplacé depuis la dernière activation, la nouvelle position reflète l'endroit actuel. La
+  // ville déclarée au profil ne sert que de filet de sécurité si la géolocalisation échoue/est
+  // refusée (voir nearMeMeetups) — jamais de position par défaut ni de repli manuel.
   const activateNearMe = () => {
-    if (!userCity) {
-      showToast(t('toast.addCityFirst'));
-      openProfile();
+    setLocating(true);
+    setLocationError(null);
+
+    const fallbackToCity = () => {
+      setLocating(false);
+      setUserCoords(null);
+      if (!userCity) {
+        setLocationError(t('toast.positionUnavailable'));
+        showToast(t('toast.addCityFirst'));
+        openProfile();
+        return;
+      }
+      setNearMeActive(true);
+      setLocationError(t('toast.positionUnavailable'));
+      window.storage.set('rezo-near-me-active', 'true', false).catch(() => {});
+    };
+
+    if (!navigator.geolocation) {
+      fallbackToCity();
       return;
     }
-    setLocating(true);
-    // Délai bref volontaire : retour visuel clair (voir demande), même si le tri par ville est
-    // instantané une fois la ville connue.
-    setTimeout(async () => {
-      setNearMeActive(true);
-      setLocating(false);
-      try {
-        await window.storage.set('rezo-near-me-active', 'true', false);
-      } catch (err) {
-        // best effort
-      }
-      showToast(t('toast.nearMeActivated', { city: userCity }));
-    }, 300);
-
-    // Bonus GPS best effort, en arrière-plan : n'empêche jamais le tri par ville de fonctionner
-    // (voir nearCityMeetups, qui ne dépend pas de userCoords) même en cas d'échec ou de refus.
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          setUserCoords(coords);
-          setLocationError(null);
-          try {
-            await window.storage.set('rezo-coords', JSON.stringify(coords), false);
-          } catch (err) {
-            // best effort persistence
-          }
-        },
-        () => {
-          // Permission refusée ou position indisponible, quelle qu'en soit la raison précise : un
-          // seul message, cohérent avec la suppression du repli manuel — le tri par ville déclarée
-          // (voir nearCityMeetups) continue de fonctionner normalement dans tous les cas.
-          setLocationError(t('toast.positionUnavailable'));
-        },
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    }
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserCoords(coords);
+        setNearMeActive(true);
+        setLocating(false);
+        setLocationError(null);
+        try {
+          await window.storage.set('rezo-near-me-active', 'true', false);
+        } catch (err) {
+          // best effort
+        }
+        showToast(t('toast.nearMeActivatedGPS'));
+      },
+      fallbackToCity,
+      // maximumAge: 0 force une lecture GPS fraîche à chaque activation, jamais une position mise
+      // en cache par le navigateur/l'OS depuis une activation précédente.
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
   };
 
   const disableNearMe = async () => {
@@ -1725,6 +1744,8 @@ export default function RezoApp() {
     setLocationError(null);
     try {
       await window.storage.set('rezo-near-me-active', 'false', false);
+      // Nettoyage d'une éventuelle position encore stockée par une version antérieure de l'app (plus
+      // jamais écrite depuis ce fix, voir activateNearMe) — best effort, sans incidence si absente.
       await window.storage.delete('rezo-coords', false).catch(() => {});
     } catch (err) {
       // best effort
@@ -3354,10 +3375,18 @@ export default function RezoApp() {
     .map(([name, info]) => ({ name, count: info.count, lastDate: info.lastDate }))
     .sort((a, b) => b.count - a.count || new Date(b.lastDate) - new Date(a.lastDate));
 
-  const byDistanceThenDate = (x, y) => {
+  // Proche ET bientôt, pas juste proche dans l'absolu (voir "Activités proches de moi") : regroupe
+  // d'abord par horizon temporel (aujourd'hui < demain < cette semaine < plus tard) avant de
+  // départager par distance — une rencontre à 8 km ce soir doit remonter avant une à 2 km dans 3
+  // semaines. Se dégrade naturellement en tri par date pure quand aucune distance n'est disponible
+  // (pas de position active, voir _distance).
+  const byHorizonThenDistance = (x, y) => {
     const xBoost = hasCircleMember(x) ? 0 : 1;
     const yBoost = hasCircleMember(y) ? 0 : 1;
     if (xBoost !== yBoost) return xBoost - yBoost;
+    const xH = timeHorizon(x.datetime);
+    const yH = timeHorizon(y.datetime);
+    if (xH !== yH) return xH - yH;
     if (x._distance !== null && y._distance !== null) return x._distance - y._distance;
     if (x._distance !== null) return -1;
     if (y._distance !== null) return 1;
@@ -3373,30 +3402,40 @@ export default function RezoApp() {
   // mur, proposer les plus proches (ou les plus proches dans le temps si pas de position).
   const nearbyFallback =
     filtered.length === 0 && locationFilterActive
-      ? [...coreFiltered].sort(byDistanceThenDate).slice(0, 6)
+      ? [...coreFiltered].sort(byHorizonThenDistance).slice(0, 6)
       : [];
 
   const grouped = ACTIVITIES.map((a) => ({
     ...a,
-    items: filtered.filter((m) => m.activity === a.id).sort(byDistanceThenDate),
+    items: filtered.filter((m) => m.activity === a.id).sort(byHorizonThenDistance),
   })).filter((g) => g.items.length > 0);
 
-  // Tri "près de moi" (voir activateNearMe) : la ville déclarée reste la source de vérité — le GPS,
-  // quand disponible, n'affine que l'ordre à l'intérieur de ce groupe (byDistanceThenDate s'appuie
-  // sur _distance, calculée seulement si userCoords est renseigné). Aucun filtrage : ce groupe
-  // s'ajoute au flux normal ci-dessous, qui reste intact et complet.
-  const nearCityMeetups =
-    nearMeActive && userCity && !mineOnly
-      ? filtered.filter((m) => m.zone && m.zone.toLowerCase().includes(userCity.trim().toLowerCase())).sort(byDistanceThenDate)
+  // "Activités proches de moi" (voir activateNearMe) : la position GPS fraîchement récupérée est la
+  // source principale dès qu'elle est disponible (_distance calculée pour toute rencontre
+  // géolocalisée, peu importe la ville) ; la ville déclarée au profil ne sert plus que de filet de
+  // sécurité quand la géolocalisation échoue ou est refusée (correspondance texte sur la zone,
+  // comme avant). Aucun filtrage sur le flux principal : ce groupe s'y ajoute, qui reste intact.
+  const nearMeMeetups =
+    nearMeActive && !mineOnly
+      ? userCoords
+        ? filtered.filter((m) => m.coords).sort(byHorizonThenDistance)
+        : userCity
+          ? filtered.filter((m) => m.zone && m.zone.toLowerCase().includes(userCity.trim().toLowerCase())).sort(byHorizonThenDistance)
+          : []
       : [];
+
+  // Regroupement visuel par horizon temporel à l'intérieur de la section "Activités proches de moi"
+  // (voir le rendu plus bas) — même logique de bucket que byHorizonThenDistance, pour que l'ordre
+  // affiché corresponde exactement aux en-têtes de section.
+  const nearMeGroups = HORIZONS.map((h, idx) => ({
+    ...h,
+    items: nearMeMeetups.filter((m) => timeHorizon(m.datetime) === idx),
+  })).filter((g) => g.items.length > 0);
 
   const recommended = userPreferences.length
     ? withDistance
         .filter((m) => userPreferences.includes(m.activity) && !isPast(m) && m.host !== userName)
-        .sort((x, y) => {
-          if (x._distance !== null && y._distance !== null) return x._distance - y._distance;
-          return new Date(x.datetime) - new Date(y.datetime);
-        })
+        .sort(byHorizonThenDistance)
         .slice(0, 6)
     : [];
 
@@ -3406,7 +3445,7 @@ export default function RezoApp() {
   const fromFollowed = followedOrganizers.length
     ? withDistance
         .filter((m) => followedOrganizers.includes(m.host) && !isPast(m) && !m.closed)
-        .sort(byDistanceThenDate)
+        .sort(byHorizonThenDistance)
         .slice(0, 6)
     : [];
 
@@ -4136,6 +4175,12 @@ export default function RezoApp() {
         .near-city-empty {
           font-size: 12.5px; color: var(--muted); background: var(--ink);
           border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+        }
+        .near-me-horizon { margin-top: 16px; }
+        .near-me-horizon:first-child { margin-top: 4px; }
+        .near-me-horizon-title {
+          font-size: 11.5px; color: var(--muted); text-transform: uppercase;
+          letter-spacing: 0.04em; margin-bottom: 8px;
         }
         .rezo-section { margin-top: 24px; }
         .rezo-section-title {
@@ -5299,19 +5344,26 @@ export default function RezoApp() {
           </div>
         )}
 
-      {nearMeActive && userCity && (
+      {nearMeActive && (userCoords || userCity) && (
         <div className="recommended-wrap near-city-wrap">
           <div className="recommended-title">
             <MapPin size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 5 }} color="var(--live)" />
-            {t('position.nearCity', { city: userCity })}
+            {userCoords ? t('position.nearMeTitle') : t('position.nearCity', { city: userCity })}
           </div>
-          {nearCityMeetups.length > 0 ? (
-            <div className="rezo-grid near-city-grid">
-              {nearCityMeetups.map((m) => renderMeetupCard(m))}
-            </div>
+          {nearMeGroups.length > 0 ? (
+            // Proche ET bientôt : sous-groupes par horizon temporel (voir nearMeGroups), triés par
+            // distance à l'intérieur de chaque groupe — pas un simple tri par distance brute.
+            nearMeGroups.map((g) => (
+              <div className="rezo-section near-me-horizon" key={g.id}>
+                <div className="rezo-section-title near-me-horizon-title">{t(g.labelKey)}</div>
+                <div className="rezo-grid near-city-grid">
+                  {g.items.map((m) => renderMeetupCard(m))}
+                </div>
+              </div>
+            ))
           ) : (
             <div className="near-city-empty">
-              {t('position.emptyCity', { city: userCity })}
+              {userCoords ? t('position.emptyNearMe') : t('position.emptyCity', { city: userCity })}
             </div>
           )}
         </div>

@@ -474,32 +474,47 @@ l'avance un lieu où l'on ne se trouve pas encore).
   autocomplétion (le plus fin) > zone choisie via autocomplétion > case
   "épingler ma position actuelle" (dépend d'être sur place) > aucune,
   laissant la rencontre en texte libre non géolocalisé comme avant.
-- **Tri par distance réelle** : une fois "📍 Activités proches de moi"
-  activé, chaque rencontre géolocalisée affiche sa distance réelle
-  (`formatDistance`, ex. "850 m" / "1.2 km") et le flux se trie par distance
-  croissante au sein de chaque groupe d'activité (`byDistanceThenDate`) — les
-  rencontres sans coordonnées précises restent visibles, triées après, par
-  ville puis date comme aujourd'hui. Ce n'est pas un mécanisme nouveau : il
-  existait déjà pour le lien "Voir sur la carte" et "Mon trajet" ; l'ajout
-  ici est la source de données (des coordonnées fiables dès la création) qui
-  lui manquait, pas le calcul de distance lui-même.
-- **"Activités proches de moi" (`activateNearMe`)** : la ville déclarée au
-  profil reste la source de vérité pour le tri (toujours disponible, quelle
-  que soit la ville/le pays — aucune logique ne présuppose le Maroc ou une
-  ville en particulier) ; une vraie demande de permission navigateur
-  (`navigator.geolocation.getCurrentPosition`) tourne en parallèle comme
-  bonus silencieux, pour affiner l'ordre par distance réelle à l'intérieur du
-  groupe "même ville" si elle est accordée — fonctionne pour n'importe quel
-  point du globe (formule de haversine, voir `distanceKm`), pas seulement le
-  Maroc. Permission refusée ou position indisponible : un message unique
+- **Tri par distance réelle** : chaque rencontre géolocalisée affiche sa
+  distance réelle (`formatDistance`, ex. "850 m" / "1.2 km") — les rencontres
+  sans coordonnées précises restent visibles, triées après. Ce n'est pas un
+  mécanisme nouveau : il existait déjà pour le lien "Voir sur la carte" et
+  "Mon trajet" ; l'ajout ici est la source de données (des coordonnées
+  fiables dès la création) qui lui manquait, pas le calcul de distance
+  lui-même.
+- **"Activités proches de moi" (`activateNearMe`)** : la position GPS réelle
+  et actuelle de l'appareil (`navigator.geolocation.getCurrentPosition`,
+  `maximumAge: 0`) est la source principale, redemandée **à chaque clic** —
+  jamais de position mise en cache d'une session précédente ou d'un autre
+  jour (`userCoords` n'est jamais persisté, seulement gardé en mémoire pour
+  la session en cours). Si l'utilisateur s'est physiquement déplacé (Rabat →
+  Tanger) depuis la dernière activation, la nouvelle position reflète
+  l'endroit actuel dès la réactivation. Fonctionne pour n'importe quel point
+  du globe (formule de haversine, voir `distanceKm`), sans dépendre d'une
+  ville déclarée. La ville du profil ne sert plus que de **filet de
+  sécurité** si la géolocalisation échoue ou est refusée (correspondance
+  texte sur la zone, comme avant ce changement) — message unique dans ce cas
   ("Position non disponible — tri basé sur ta ville de profil.") plutôt
-  qu'un vrai blocage, le tri par ville continuant de fonctionner normalement.
+  qu'un vrai blocage.
   ⚠️ L'ancien repli de test avec villes marocaines codées en dur
   (Casablanca/Rabat/Marrakech) et saisie manuelle de lat/lng — nécessaire
   quand l'app tournait dans un iframe sandboxé où `navigator.geolocation` ne
   fonctionnait pas — a été entièrement retiré maintenant que l'app est servie
   depuis son propre domaine (rezomeet.com) : la vraie demande de permission
   du navigateur fonctionne normalement.
+- **Proche ET bientôt, pas juste proche dans l'absolu** : le tri ne se fait
+  jamais par distance brute seule — `byHorizonThenDistance` regroupe d'abord
+  par horizon temporel (`timeHorizon` : aujourd'hui < demain < cette semaine
+  < plus tard) avant de départager par distance à l'intérieur de chaque
+  groupe, pour qu'une rencontre proche mais dans 3 semaines ne remonte jamais
+  avant une un peu plus loin mais ce soir. Utilisé partout où le flux se
+  triait déjà par distance (flux principal, repli "ville fantôme",
+  recommandations, abonnements) — se dégrade naturellement en tri par date
+  pure quand aucune position n'est active. La section dédiée "Activités
+  proches de moi" (`nearMeMeetups`/`nearMeGroups`) affiche ce regroupement
+  visuellement, avec un sous-titre par horizon ("Aujourd'hui", "Demain",
+  "Cette semaine", "Plus tard"), sans qu'un rafraîchissement de page soit
+  nécessaire — la distance et le tri se recalculent immédiatement à partir de
+  la position fraîchement récupérée, dès qu'elle arrive.
 
 ## Éviter la "ville fantôme" (flux vide au lancement)
 
