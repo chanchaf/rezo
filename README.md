@@ -69,8 +69,10 @@ point d'entrée modifié :
   — volontairement pas par largeur de fenêtre, pour qu'une fenêtre desktop
   redimensionnée en étroit reste sur le web) **OU déjà connecté** (n'importe
   quel appareil, via la même session `localStorage` que l'app lit
-  normalement) → l'app mobile existante, inchangée, y compris son cadre
-  "smartphone" en desktop.
+  normalement) → l'app mobile existante. En dessous de 768px de large,
+  rendu strictement inchangé ; au-dessus (visiteur connecté sur desktop),
+  l'app bascule vers une mise en page desktop dédiée — voir "App connectée
+  sur grand écran" ci-dessous — qui a remplacé l'ancien cadre "smartphone".
 - **Visiteur desktop non connecté** → `src/Landing.jsx` (page marketing :
   header, hero avec captures d'écran réelles de l'app — voir
   `public/landing/*.png`, capturées via Playwright, pas le composant React
@@ -90,11 +92,47 @@ montage exactement comme pour un retour de visite normal, sans aucun code
 partagé entre les deux. ⚠️ Les deux copies doivent rester équivalentes si la
 logique change d'un côté (voir le commentaire en tête de `webAuth.js`).
 
-Le cadre "smartphone" du desktop (`src/index.css`) ne devait plus s'appliquer
-qu'à l'app mobile, jamais à la landing — un sélecteur CSS seul ne pouvant pas
-cibler `#root` selon ce que contient son enfant, `main.jsx` pose une classe
-`rezo-mode-app` sur `<body>` pendant le rendu (pas un effet, pour éviter tout
-flash) plutôt que d'utiliser `:has()` (support navigateur plus incertain).
+La classe `rezo-mode-app`, posée sur `<body>` par `main.jsx` pendant le rendu
+(pas un effet, pour éviter tout flash) plutôt qu'un sélecteur `:has()`
+(support navigateur plus incertain), sert à cibler l'app mobile depuis
+`index.css` sans jamais affecter la landing/l'écran de connexion web, qui
+doivent rester plein écran.
+
+## App connectée sur grand écran (≥768px)
+
+En dessous de 768px, aucune des règles ci-dessous ne s'applique : c'est le
+rendu mobile actuel, à l'identique (vérifié par un test automatisé qui
+compare le CSS calculé — `display:flex`, hauteur de nav 64px, disposition
+en ligne — entre avant et après ce travail, sur un vrai user-agent mobile).
+Au-dessus de 768px, `App.jsx` bascule vers une mise en page desktop, gérée
+entièrement par des `@media (min-width: 768px)` dans son propre `<style>` :
+
+- **Plus de cadre "smartphone"** (`src/index.css`) : l'app occupe toute la
+  largeur utile, centrée, avec un maximum de 1400px.
+- **Barre de navigation du bas → sidebar fixe à gauche** : `.rezo-app`
+  passe de `display:flex` (colonne) à `display:grid` avec
+  `grid-template-areas: "nav header" "nav scroll"` — la nav (mêmes boutons,
+  mêmes handlers, aucun changement de comportement) est simplement
+  réassignée à la zone "nav" et restylée en colonne plutôt que ligne. La
+  grille assure nativement que la sidebar reste visible pendant que le
+  contenu défile dans sa propre zone.
+- **Grille multi-colonnes** : `.rezo-grid` était déjà en
+  `display:grid; grid-template-columns: repeat(auto-fill, minmax(...))` —
+  il suffisait de ne plus contraindre son conteneur à ~380px de large pour
+  qu'elle affiche 2-3 cartes par ligne automatiquement.
+- **Page de profil en deux colonnes** : `.profile-page-body` regroupe
+  désormais ses enfants dans deux wrappers `.profile-left-col` /
+  `.profile-right-col` (aucun style par défaut, donc invisibles/sans effet
+  en dessous de 768px) qui deviennent les deux colonnes d'une grille
+  35fr/65fr au-dessus. ⚠️ Utiliser `fr` et pas `%` pour ces colonnes : des
+  colonnes en `%` qui totalisent 100% ignorent `column-gap` (la gouttière
+  s'ajoute par-dessus et déborde silencieusement, caché par
+  `overflow:hidden` sur `.rezo-app`) — piège CSS Grid classique rencontré et
+  corrigé pendant ce travail.
+- **Effets de survol** : ajoutés sous
+  `@media (min-width: 768px) and (hover: hover) and (pointer: fine)` plutôt
+  que juste `min-width`, pour ne jamais se déclencher sur un écran tactile
+  large (grande tablette, etc.).
 
 Après connexion/inscription, un compte fraîchement créé depuis le web
 atterrit sur le flux normal de l'app plutôt que sur la modale "Ton profil"

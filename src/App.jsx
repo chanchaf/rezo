@@ -3274,6 +3274,7 @@ export default function RezoApp() {
           --amber: #F2A65A;
           --danger: #FA383E;
           --nav-h: 64px;
+          --nav-w: 220px;
           --cta-grad: linear-gradient(135deg, #1877F2, #145DBF);
           font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
           background: var(--ink);
@@ -4445,6 +4446,121 @@ export default function RezoApp() {
         [dir="rtl"] .live-list-row { border-left: none; border-right: 3px solid var(--live); }
         [dir="rtl"] .live-list-row.arrived { border-left-color: transparent; border-right-color: #7FCF9E; }
         [dir="rtl"] .lang-menu-dropdown.align-right { right: auto; left: 0; }
+
+        /* --- App connectée sur grand écran (≥768px) ----------------------------------------------
+           En dessous de 768px, rien de ce qui suit ne s'applique : c'est le rendu mobile actuel, à
+           l'identique (contrainte produit). Le cadre "smartphone" lui-même est retiré côté
+           index.css ; ici on réorganise le contenu de l'app (déjà rendu, mêmes composants/JSX,
+           mêmes handlers) en layout desktop via CSS Grid — la nav du bas devient une colonne de
+           gauche fixe (mêmes boutons, juste repositionnés), le flux passe en grille multi-colonnes
+           (déjà en display:grid avec auto-fill, il suffisait de ne plus le contraindre à ~380px de
+           large), et la page de profil passe en deux colonnes pour éviter le long défilement. */
+        @media (min-width: 768px) {
+          .rezo-app {
+            display: grid;
+            grid-template-columns: var(--nav-w) 1fr;
+            grid-template-rows: auto 1fr;
+            grid-template-areas: "nav header" "nav scroll";
+          }
+          .rezo-header { grid-area: header; }
+          .rezo-scroll { grid-area: scroll; }
+
+          /* Nav du bas -> sidebar fixe à gauche (colonne "nav" du grid ci-dessus, pleine hauteur —
+             reste visible pendant que .rezo-scroll défile dans sa propre colonne). */
+          .bottom-nav {
+            grid-area: nav;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: flex-start;
+            width: 100%;
+            height: 100%;
+            padding: 20px 12px;
+            gap: 6px;
+            border-top: none;
+            border-inline-end: 1px solid var(--border);
+          }
+          .bottom-nav-item {
+            flex: none;
+            flex-direction: row;
+            justify-content: flex-start;
+            gap: 12px;
+            font-size: 14px;
+            padding: 12px 14px;
+          }
+          .bottom-nav-item.active { background: rgba(var(--live-rgb), 0.1); }
+          .bottom-nav-badge { inset-inline-start: 26px; top: 6px; transform: none; }
+          .bottom-nav-center {
+            width: 100%; height: 48px; margin-top: 4px;
+            border-radius: 12px; border: none;
+          }
+
+          .rezo-body { padding: 8px 24px 24px; }
+          .rezo-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+          /* Pages plein écran (profil, cercle — voir .profile-page réutilisée pour les deux) :
+             réservaient de la place en bas pour la nav ; elles doivent maintenant en réserver à
+             côté de la sidebar. left/right sont des propriétés physiques (pas logiques) donc ne
+             suivent pas dir=rtl tout seules, d'où l'override RTL explicite juste après. */
+          .profile-page { left: var(--nav-w); bottom: 0; }
+          [dir="rtl"] .profile-page { left: 0; right: var(--nav-w); }
+
+          /* Page de profil en deux colonnes (~35% / ~65%) plutôt que le long défilement vertical
+             mobile : chaque enfant existant de .profile-page-body est assigné à une zone nommée
+             ("left" ou "right") — plusieurs enfants peuvent partager la même zone, ils s'empilent
+             alors normalement à l'intérieur, dans l'ordre du DOM (donc le même ordre qu'en mobile). */
+          .profile-page-cover { height: 220px; }
+          .profile-page-avatar-wrap {
+            width: 100%; max-width: 1100px; margin: -56px auto 0;
+            padding-inline-start: 40px; justify-content: flex-start; box-sizing: border-box;
+          }
+          .profile-page-body {
+            display: grid;
+            /* fr, pas % : des colonnes en % qui totalisent 100% ignorent column-gap (le gap
+               s'ajoute par-dessus et déborde) — fr partage correctement l'espace après les gouttières. */
+            grid-template-columns: 35fr 65fr;
+            column-gap: 48px;
+            align-items: start;
+            text-align: start;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px 40px 40px;
+          }
+          .profile-page-name,
+          .profile-page-subtitle {
+            justify-content: flex-start;
+          }
+          .profile-stats-row { text-align: center; }
+          .profile-right-col .profile-section:first-child { margin-top: 0; }
+          /* Les enfants de grid ont un min-width:auto implicite (respecte le min-content du
+             contenu) : sans ce reset, un long libellé de badge peut pousser la grille au-delà de la
+             largeur disponible (overflow discret, silencieusement rogné par overflow:hidden sur
+             .rezo-app). min-width:0 laisse chaque colonne se contenir dans l'espace alloué. */
+          .profile-left-col,
+          .profile-right-col {
+            min-width: 0;
+          }
+        }
+
+        /* Effets de survol desktop uniquement (souris réelle + assez de place) : le design actuel
+           est pensé tactile, donc rien ici ne doit se déclencher sur mobile/tablette tactile même
+           si elle est large (d'où (hover:hover) and (pointer:fine) en plus de min-width). */
+        @media (min-width: 768px) and (hover: hover) and (pointer: fine) {
+          .card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+          .card:hover { transform: translateY(-3px); box-shadow: 0 14px 32px rgba(0,0,0,0.10); }
+          .bottom-nav-item:hover { background: var(--card-hover); color: var(--text); }
+          .join-btn:hover:not(:disabled), .modal-submit:hover:not(:disabled), .bottom-nav-center:hover {
+            filter: brightness(1.07);
+          }
+          .chip:hover, .pref-chip:hover, .gender-btn:hover, .geo-btn:hover, .toggle-btn:hover,
+          .segmented-item:hover, .recommended-card:hover {
+            border-color: var(--live);
+          }
+          .audience-badge:hover, .series-badge:hover, .live-badge:hover, .card-rating-pill:hover {
+            filter: brightness(1.08);
+          }
+          .follow-btn:hover { filter: brightness(1.08); }
+          .profile-badge:hover { border-color: var(--live); box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+        }
       `}</style>
 
       {showSplash && (
@@ -5414,150 +5530,158 @@ export default function RezoApp() {
             </div>
 
             <div className="profile-page-body">
-              <div className="profile-page-name">
-                {profileTargetName} {profileLastName}
-                {profileVerified && (
-                  <span className="card-verified-badge" title={t('card.verified')}>
-                    <ShieldCheck size={13} /> {t('card.verified')}
-                  </span>
+              {/* Deux wrappers de regroupement (aucun style par défaut, donc invisibles en mobile —
+                  voir .profile-left-col/.profile-right-col dans le bloc desktop ≥768px) : c'est ce
+                  qui permet à la page de profil de passer en deux colonnes sur grand écran sans que
+                  l'ordre ni le contenu affiché en mobile ne change d'un pixel. */}
+              <div className="profile-left-col">
+                <div className="profile-page-name">
+                  {profileTargetName} {profileLastName}
+                  {profileVerified && (
+                    <span className="card-verified-badge" title={t('card.verified')}>
+                      <ShieldCheck size={13} /> {t('card.verified')}
+                    </span>
+                  )}
+                </div>
+                {myRatingStats && (
+                  <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <StarDisplay value={myRatingStats.avg} count={myRatingStats.count} size={14} />
+                    {!isOwnProfile && (
+                      <button
+                        className={`follow-btn ${isFollowingProfile ? 'following' : ''}`}
+                        onClick={() => toggleFollow(profileTargetName)}
+                      >
+                        {isFollowingProfile ? t('follow.following') : t('follow.follow')}
+                      </button>
+                    )}
+                  </div>
                 )}
-              </div>
-              {myRatingStats && (
-                <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <StarDisplay value={myRatingStats.avg} count={myRatingStats.count} size={14} />
-                  {!isOwnProfile && (
+                {!myRatingStats && !isOwnProfile && (
+                  <div style={{ marginTop: 6 }}>
                     <button
                       className={`follow-btn ${isFollowingProfile ? 'following' : ''}`}
                       onClick={() => toggleFollow(profileTargetName)}
                     >
                       {isFollowingProfile ? t('follow.following') : t('follow.follow')}
                     </button>
-                  )}
+                  </div>
+                )}
+                <div className="profile-page-subtitle">
+                  {profileFollowersCount === 1 ? t('follow.followers', { count: profileFollowersCount }) : t('follow.followersPlural', { count: profileFollowersCount })}
                 </div>
-              )}
-              {!myRatingStats && !isOwnProfile && (
-                <div style={{ marginTop: 6 }}>
+                {(profileCity || profileCountry) && (
+                  <div className="profile-page-subtitle">
+                    <MapPin size={12} /> {[profileCity, profileCountry].filter(Boolean).join(', ')}
+                  </div>
+                )}
+
+                <div className="profile-stats-row">
                   <button
-                    className={`follow-btn ${isFollowingProfile ? 'following' : ''}`}
-                    onClick={() => toggleFollow(profileTargetName)}
+                    className="profile-stat"
+                    onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
                   >
-                    {isFollowingProfile ? t('follow.following') : t('follow.follow')}
+                    <div className="profile-stat-value">{organizedCount}</div>
+                    <div className="profile-stat-label">{t('profile.organized')}</div>
+                  </button>
+                  <button
+                    className="profile-stat"
+                    onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
+                  >
+                    <div className="profile-stat-value">{participatedCount}</div>
+                    <div className="profile-stat-label">{t('profile.completed')}</div>
+                  </button>
+                  <button
+                    className="profile-stat"
+                    onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
+                  >
+                    <div className="profile-stat-value">{myRatingStats ? myRatingStats.avg.toFixed(1) : '—'}</div>
+                    <div className="profile-stat-label">{myRatingStats ? t('profile.avgRating') : t('profile.reviewsReceived')}</div>
                   </button>
                 </div>
-              )}
-              <div className="profile-page-subtitle">
-                {profileFollowersCount === 1 ? t('follow.followers', { count: profileFollowersCount }) : t('follow.followersPlural', { count: profileFollowersCount })}
-              </div>
-              {(profileCity || profileCountry) && (
-                <div className="profile-page-subtitle">
-                  <MapPin size={12} /> {[profileCity, profileCountry].filter(Boolean).join(', ')}
-                </div>
-              )}
 
-              <div className="profile-stats-row">
-                <button
-                  className="profile-stat"
-                  onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
-                >
-                  <div className="profile-stat-value">{organizedCount}</div>
-                  <div className="profile-stat-label">{t('profile.organized')}</div>
-                </button>
-                <button
-                  className="profile-stat"
-                  onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
-                >
-                  <div className="profile-stat-value">{participatedCount}</div>
-                  <div className="profile-stat-label">{t('profile.completed')}</div>
-                </button>
-                <button
-                  className="profile-stat"
-                  onClick={() => { if (!isOwnProfile) return; setShowProfilePage(false); setMineOnly(true); }}
-                >
-                  <div className="profile-stat-value">{myRatingStats ? myRatingStats.avg.toFixed(1) : '—'}</div>
-                  <div className="profile-stat-label">{myRatingStats ? t('profile.avgRating') : t('profile.reviewsReceived')}</div>
-                </button>
+                {profileBio && <div className="profile-bio">{profileBio}</div>}
               </div>
 
-              {profileBio && <div className="profile-bio">{profileBio}</div>}
+              <div className="profile-right-col">
+                {profilePreferences.length > 0 && (
+                  <div className="profile-section">
+                    <div className="profile-section-title">{t('profile.preferredActivities')}</div>
+                    <div className="profile-activity-tags">
+                      {profilePreferences.map((id) => {
+                        const a = activityById(id);
+                        return (
+                          <span
+                            key={id}
+                            className="profile-activity-tag"
+                            style={{ background: `${a.color}22`, color: a.color, border: `1px solid ${a.color}55` }}
+                          >
+                            {aLabel(id)}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
-              {profilePreferences.length > 0 && (
                 <div className="profile-section">
-                  <div className="profile-section-title">{t('profile.preferredActivities')}</div>
-                  <div className="profile-activity-tags">
-                    {profilePreferences.map((id) => {
-                      const a = activityById(id);
+                  <div className="profile-section-title">{t('profile.badges')}</div>
+                  <div className="profile-badges-grid">
+                    {PROFILE_BADGES.map((b) => {
+                      const BadgeIcon = b.icon;
                       return (
-                        <span
-                          key={id}
-                          className="profile-activity-tag"
-                          style={{ background: `${a.color}22`, color: a.color, border: `1px solid ${a.color}55` }}
-                        >
-                          {aLabel(id)}
-                        </span>
+                        <div key={b.id} className={`profile-badge ${b.unlocked ? 'unlocked' : ''}`} title={b.hint}>
+                          <div className="profile-badge-icon"><BadgeIcon size={20} /></div>
+                          <div className="profile-badge-label">{b.label}</div>
+                          {!b.unlocked && <div className="profile-badge-progress">{b.counter}/{b.threshold}</div>}
+                        </div>
                       );
                     })}
                   </div>
                 </div>
-              )}
 
-              <div className="profile-section">
-                <div className="profile-section-title">{t('profile.badges')}</div>
-                <div className="profile-badges-grid">
-                  {PROFILE_BADGES.map((b) => {
-                    const BadgeIcon = b.icon;
-                    return (
-                      <div key={b.id} className={`profile-badge ${b.unlocked ? 'unlocked' : ''}`} title={b.hint}>
-                        <div className="profile-badge-icon"><BadgeIcon size={20} /></div>
-                        <div className="profile-badge-label">{b.label}</div>
-                        {!b.unlocked && <div className="profile-badge-progress">{b.counter}/{b.threshold}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="profile-section">
-                <div className="profile-section-title-row">
-                  <div className="profile-section-title">{t('profile.history')}</div>
-                  {isOwnProfile && profileHistory.length > 0 && (
-                    <button
-                      className="profile-section-link"
-                      onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
-                    >
-                      {t('profile.viewAll')} <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none' }} />
-                    </button>
-                  )}
-                </div>
-                {profileHistory.length === 0 ? (
-                  <div className="near-city-empty">{t('profile.noHistory')}</div>
-                ) : (
-                  <div className="profile-history-list">
-                    {profileHistory.map((m) => (
-                      <div key={m.id} className="profile-history-row">
-                        <span className="swatch" style={{ background: activityById(m.activity).color }}></span>
-                        <div className="profile-history-mid">
-                          <div className="profile-history-title">{m.title}</div>
-                          <div className="profile-history-meta">
-                            {formatWhen(m.datetime, language)} · {m.host === profileTargetName ? t('profile.organizedRole') : t('profile.participatedRole')}
+                <div className="profile-section">
+                  <div className="profile-section-title-row">
+                    <div className="profile-section-title">{t('profile.history')}</div>
+                    {isOwnProfile && profileHistory.length > 0 && (
+                      <button
+                        className="profile-section-link"
+                        onClick={() => { setShowProfilePage(false); setMineOnly(true); }}
+                      >
+                        {t('profile.viewAll')} <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none' }} />
+                      </button>
+                    )}
+                  </div>
+                  {profileHistory.length === 0 ? (
+                    <div className="near-city-empty">{t('profile.noHistory')}</div>
+                  ) : (
+                    <div className="profile-history-list">
+                      {profileHistory.map((m) => (
+                        <div key={m.id} className="profile-history-row">
+                          <span className="swatch" style={{ background: activityById(m.activity).color }}></span>
+                          <div className="profile-history-mid">
+                            <div className="profile-history-title">{m.title}</div>
+                            <div className="profile-history-meta">
+                              {formatWhen(m.datetime, language)} · {m.host === profileTargetName ? t('profile.organizedRole') : t('profile.participatedRole')}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {isOwnProfile && (
+                  <button
+                    type="button"
+                    className="profile-section-link profile-circle-link"
+                    onClick={() => { setShowProfilePage(false); setShowCirclePage(true); }}
+                  >
+                    <Users size={14} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
+                    {t('nav.myCircle')}
+                    <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none', marginInlineStart: 4 }} />
+                  </button>
                 )}
               </div>
-
-              {isOwnProfile && (
-                <button
-                  type="button"
-                  className="profile-section-link profile-circle-link"
-                  onClick={() => { setShowProfilePage(false); setShowCirclePage(true); }}
-                >
-                  <Users size={14} style={{ verticalAlign: '-2px', marginInlineEnd: 6 }} />
-                  {t('nav.myCircle')}
-                  <ChevronRight size={13} style={{ transform: dir === 'rtl' ? 'scaleX(-1)' : 'none', marginInlineStart: 4 }} />
-                </button>
-              )}
             </div>
           </div>
         </div>

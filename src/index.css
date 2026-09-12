@@ -30,28 +30,29 @@ body {
   height: 100dvh;
 }
 
-/* Écrans larges (desktop) : aperçu façon smartphone, cadre + ombre — uniquement pour l'app mobile
-   existante. La classe "rezo-mode-app" est posée sur <body> par main.jsx UNIQUEMENT quand .rezo-app
-   est monté (jamais pour la landing/web-auth) — voir main.jsx. Un simple sélecteur CSS ne peut pas
-   cibler #root selon ce que contient son enfant, d'où ce petit relais JS plutôt que ":has()" (support
-   navigateur plus large). N'affecte en rien l'app mobile elle-même : mêmes styles qu'avant. */
-@media (min-width: 640px) {
+/* App connectée sur grand écran (≥768px) : plus de cadre "smartphone" flottant sur fond noir — l'app
+   occupe toute la largeur utile, centrée, avec une largeur max raisonnable. En dessous de 768px,
+   rien ne change : c'est le rendu mobile actuel, à l'identique (voir la contrainte produit). La
+   bascule sidebar/grille multi-colonnes/etc. elle-même vit dans les media queries internes de
+   App.jsx (son propre <style>) — ici on ne fait que retirer la mise en scène "cadre téléphone" et
+   laisser l'app respirer sur toute la largeur. La classe "rezo-mode-app" est posée sur <body> par
+   main.jsx UNIQUEMENT quand .rezo-app est monté (jamais pour la landing/web-auth) — voir main.jsx.
+   Un simple sélecteur CSS ne peut pas cibler #root selon ce que contient son enfant, d'où ce petit
+   relais JS plutôt que ":has()" (support navigateur plus large). N'affecte en rien le rendu < 768px. */
+@media (min-width: 768px) {
   body.rezo-mode-app {
-    background: radial-gradient(circle at 50% 0%, #1a1d29 0%, #0B0C10 62%);
+    background: #F0F2F5;
   }
   body.rezo-mode-app #root {
-    align-items: center;
-    padding: 32px 12px;
+    align-items: stretch;
+    padding: 0;
   }
-  #root > .rezo-app {
+  body.rezo-mode-app #root > .rezo-app {
     width: 100%;
-    max-width: 420px;
-    height: min(880px, calc(100dvh - 64px));
-    border-radius: 40px;
-    overflow: hidden;
-    box-shadow:
-      0 30px 80px rgba(0, 0, 0, 0.55),
-      0 0 0 10px #05060a,
-      0 0 0 12px #23262f;
+    max-width: 1400px;
+    height: 100dvh;
+    margin: 0 auto;
+    border-radius: 0;
+    box-shadow: none;
   }
 }
