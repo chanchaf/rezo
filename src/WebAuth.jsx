@@ -376,14 +376,14 @@ export default function WebAuth({ language, setLanguage, dir, t, initialMode = '
                   <span>
                     {interpolateNodes(t('auth.termsCheckbox'), {
                       terms: (
-                        <button type="button" className="webauth-legal-link" onClick={() => legalPlaceholder(t('auth.termsOfUse'))}>
+                        <a href="/conditions-utilisation" target="_blank" rel="noopener" className="webauth-legal-link">
                           {t('auth.termsOfUse')}
-                        </button>
+                        </a>
                       ),
                       privacy: (
-                        <button type="button" className="webauth-legal-link" onClick={() => legalPlaceholder(t('auth.privacyPolicy'))}>
+                        <a href="/politique-confidentialite" target="_blank" rel="noopener" className="webauth-legal-link">
                           {t('auth.privacyPolicy')}
-                        </button>
+                        </a>
                       ),
                     })}
                   </span>

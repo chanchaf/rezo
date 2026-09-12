@@ -170,8 +170,8 @@ export default function Landing({ language, setLanguage, dir, t, onGoAuth }) {
         <div className="landing-footer-inner">
           <div className="landing-footer-brand">RÉZO<span className="dot">·</span></div>
           <div className="landing-footer-links">
-            <a href="#">{t('landing.footer.terms')}</a>
-            <a href="#">{t('landing.footer.privacy')}</a>
+            <a href="/conditions-utilisation" target="_blank" rel="noopener">{t('landing.footer.terms')}</a>
+            <a href="/politique-confidentialite" target="_blank" rel="noopener">{t('landing.footer.privacy')}</a>
             <a href="#">{t('landing.footer.contact')}</a>
           </div>
           <LangSwitcher language={language} setLanguage={setLanguage} />

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>REZO</title>
+    <script>
+      // GitHub Pages sert ce fichier pour toute URL sans fichier correspondant (ex: rechargement
+      // direct sur /conditions-utilisation ou /politique-confidentialite, des routes gérées côté
+      // client par main.jsx, pas par de vrais fichiers). On mémorise le chemin demandé puis on
+      // redirige vers la racine ; index.html restaure ensuite ce chemin avant le premier rendu
+      // (voir le script correspondant dans index.html) — technique standard pour une SPA sur
+      // GitHub Pages, sans dépendance à un routeur.
+      sessionStorage.setItem('rezo-redirect-path', location.pathname + location.search + location.hash);
+      location.replace('/');
+    </script>
+  </head>
+  <body></body>
+</html>

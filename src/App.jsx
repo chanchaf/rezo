@@ -5705,14 +5705,14 @@ export default function RezoApp() {
                       <span>
                         {interpolateNodes(t('auth.termsCheckbox'), {
                           terms: (
-                            <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.termsOfUse'))}>
+                            <a href="/conditions-utilisation" target="_blank" rel="noopener" className="auth-legal-link">
                               {t('auth.termsOfUse')}
-                            </button>
+                            </a>
                           ),
                           privacy: (
-                            <button type="button" className="auth-legal-link" onClick={() => showLegalPlaceholder(t('auth.privacyPolicy'))}>
+                            <a href="/politique-confidentialite" target="_blank" rel="noopener" className="auth-legal-link">
                               {t('auth.privacyPolicy')}
-                            </button>
+                            </a>
                           ),
                         })}
                       </span>

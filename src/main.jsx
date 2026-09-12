@@ -4,6 +4,7 @@ import { installStoragePolyfill } from './lib/storagePolyfill.js';
 import App from './App.jsx';
 import Landing from './Landing.jsx';
 import WebAuth from './WebAuth.jsx';
+import LegalPage, { legalPageForPath } from './LegalPage.jsx';
 import { isMobileUserAgent } from './lib/device.js';
 import { getStoredSessionEmail, getStoredLanguage, setStoredLanguage } from './lib/webAuth.js';
 import { translate, detectBrowserLanguage, dirForLanguage } from './lib/i18n.js';
@@ -41,12 +42,21 @@ function Root() {
 
   const showApp = isMobile || loggedIn;
 
+  // Pages légales (CGU, confidentialité) : accessibles à tout le monde par leur URL propre, sur
+  // mobile comme sur desktop, connecté ou non — donc vérifiées AVANT showApp, qui sinon renverrait
+  // toujours l'app mobile normale pour ces deux mêmes cas de figure (voir legalPageForPath).
+  const legalPage = legalPageForPath(window.location.pathname);
+
   // Le cadre "smartphone" en desktop (voir index.css) ne doit s'appliquer qu'à l'app mobile
   // existante, jamais à la landing/l'écran de connexion web qui doivent rester plein écran — posé
   // en dehors de React (classe sur <body>) car un sélecteur CSS seul ne peut pas cibler un ancêtre
   // selon ce que contient son enfant. Fait pendant le rendu (pas un effet) pour éviter tout flash.
   if (typeof document !== 'undefined') {
-    document.body.classList.toggle('rezo-mode-app', showApp);
+    document.body.classList.toggle('rezo-mode-app', showApp && !legalPage);
+  }
+
+  if (legalPage) {
+    return <LegalPage page={legalPage} />;
   }
 
   if (showApp) {

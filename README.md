@@ -98,6 +98,41 @@ La classe `rezo-mode-app`, posée sur `<body>` par `main.jsx` pendant le rendu
 `index.css` sans jamais affecter la landing/l'écran de connexion web, qui
 doivent rester plein écran.
 
+## Pages légales (CGU, confidentialité)
+
+`src/LegalPage.jsx` — deux vraies pages, accessibles à tout le monde par leur
+URL propre (`/conditions-utilisation`, `/politique-confidentialite`),
+**indépendamment** de `isMobile`/`loggedIn` : vérifiées dans `Root()`
+(`main.jsx`) avant l'aiguillage habituel, sans quoi un visiteur mobile ou déjà
+connecté verrait toujours l'app normale sur ces deux chemins. Liées depuis les
+cases à cocher des écrans d'inscription (`App.jsx` et `WebAuth.jsx`, liens
+réels `<a target="_blank">`, plus de placeholder) et depuis le footer de la
+landing (`Landing.jsx`).
+
+⚠️ **Contenu fourni par le produit, pas rédigé/validé par un juriste** — un
+brouillon de base cohérent avec les fonctionnalités réelles de l'app. Avant un
+vrai lancement public, à faire relire par un avocat, en particulier vu les
+données sensibles collectées (sexe, localisation, photos) : la loi marocaine
+09-08 encadre la protection des données personnelles. Date de dernière mise à
+jour et adresse de contact codées en dur en tête de `LegalPage.jsx`
+(`LAST_UPDATED`, `CONTACT_EMAIL`) — à ajuster si le texte est mis à jour ou si
+l'adresse de contact change. Contenu rendu uniquement en français (le texte
+fourni ne l'était que dans cette langue) : pas branché sur `t()`/i18n comme le
+reste de l'app, pour ne pas improviser une traduction non relue d'un document
+légal.
+
+**Routage sans dépendance à un routeur**, cohérent avec le reste de l'app
+(navigation par état, pas de `react-router`) : `Root()` lit
+`window.location.pathname` directement. GitHub Pages ne sert que
+`index.html` à la racine ; un rechargement direct sur `/conditions-utilisation`
+recevrait un vrai 404 sans `public/404.html`, qui mémorise le chemin demandé
+dans `sessionStorage` puis redirige vers `/` — `index.html` restaure ensuite
+ce chemin (`history.replaceState`) avant que `main.jsx` ne s'exécute. Technique
+standard pour une SPA sur GitHub Pages ; testée avec un petit serveur statique
+local reproduisant le comportement 404 de GitHub Pages (`vite preview`/`serve
+-s` ne conviennent pas pour ce test : ils font un fallback SPA silencieux vers
+`index.html` en 200, masquant le vrai comportement).
+
 ## App connectée sur grand écran (≥768px)
 
 En dessous de 768px, aucune des règles ci-dessous ne s'applique : c'est le
@@ -307,9 +342,10 @@ l'utilisateur doit :
      `rezomeet.com` (et tout autre domaine de déploiement) aux "Authorized
      domains" de Firebase Authentication.
 
-     Idem pour "Mot de passe oublié ?" et les liens légaux (reCAPTCHA,
-     politique de confidentialité, conditions d'utilisation) : aucune vraie
-     page/flux derrière pour l'instant.
+     Idem pour "Mot de passe oublié ?" (reCAPTCHA/e-mail de réinitialisation) :
+     aucun vrai flux derrière pour l'instant. Les liens "conditions
+     d'utilisation" et "politique de confidentialité" de la case à cocher,
+     eux, pointent vers de vraies pages — voir "Pages légales" plus haut.
 2. **Remplir son profil** : prénom, nom, sexe, pays (présélectionné via
    géolocalisation IP, repli sur le Maroc), ville, activités préférées, photo
    optionnelle. Cette étape est obligatoire et s'enchaîne automatiquement
