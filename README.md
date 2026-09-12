@@ -181,25 +181,34 @@ de revenir" plus bas). Il lit/écrit dans la MÊME collection Firestore via
 2. Récupérer la config web (Paramètres du projet → Général → Vos
    applications → Config SDK) et la coller dans `.env.local`
    (voir `.env.example`).
-3. Dans Firestore Database → Règles, pour ce prototype (aucune authentification
-   par utilisateur sur les données, comme l'ancien backend Express) :
+3. **Activer Authentication → Sign-in method → Anonymous.** ⚠️ Étape
+   obligatoire, sans quoi toute lecture/écriture échoue avec
+   `auth/configuration-not-found` (Authentication jamais activé pour le
+   projet) ou `permission-denied` (activé mais le fournisseur Anonymous ne
+   l'est pas) — voir le point 4 ci-dessous, les règles exigent désormais une
+   session authentifiée.
+4. Dans Firestore Database → Règles :
 
    ```
    rules_version = '2';
    service cloud.firestore {
      match /databases/{database}/documents {
        match /{document=**} {
-         allow read, write: if true;
+         allow read, write: if request.auth != null;
        }
      }
    }
    ```
 
-   ⚠️ Ces règles sont **ouvertes à tout le monde** — volontaire pour ce
-   stade du projet, mais à remplacer par de vraies règles restreintes avant
-   toute mise en production (typiquement couplées à une vraie authentification
-   Firebase Auth plutôt que le système de comptes maison actuel — voir
-   "Compte et profil").
+   `request.auth != null` est satisfait par l'authentification **anonyme**
+   Firebase (voir `authReady` dans `src/lib/firebase.js`, appelée
+   automatiquement au démarrage, invisible pour l'utilisateur) — un verrou
+   technique contre les robots/scripts externes qui liraient/écriraient
+   directement sans passer par l'app, pas une vraie identité utilisateur
+   (voir "Compte et profil" pour la vraie authentification téléphone/e-mail,
+   entièrement indépendante). Les données elles-mêmes restent lisibles/
+   modifiables par n'importe quel utilisateur authentifié anonymement — pas
+   de règles par-utilisateur avant une vraie mise en production.
 
 Sans `.env.local`, l'app utilise une config Firebase par défaut codée en dur
 (le projet de développement d'origine) — pratique pour un premier essai,
@@ -563,13 +572,18 @@ plutôt qu'un système d'amis déclaratif classique — cohérent avec l'esprit
 
 ## Prochaines étapes recommandées
 
-1. **Vraies règles de sécurité Firestore** — les règles actuelles sont
-   ouvertes à tout le monde (voir "Configurer Firebase" ci-dessus), acceptable
-   pour prototyper mais pas pour un vrai lancement.
-2. **Authentification réelle** (Firebase Auth) pour remplacer l'écran de
-   compte maison actuel (voir "Compte et profil" ci-dessus), notamment vu les
-   données sensibles (sexe) — permettrait aussi d'écrire des règles Firestore
-   qui vérifient l'identité de l'appelant plutôt que d'être grandes ouvertes.
+1. **Vraies règles de sécurité Firestore par utilisateur** — les règles
+   actuelles exigent une session authentifiée (`request.auth != null`,
+   voir "Configurer Firebase" ci-dessus) mais restent ouvertes à quiconque
+   passe par ce verrou anonyme : n'importe quel utilisateur authentifié peut
+   lire/modifier les données de n'importe qui d'autre. Acceptable pour
+   prototyper, pas pour un vrai lancement.
+2. **Authentification réelle** (Firebase Auth avec de vraies identités, pas
+   seulement anonyme) pour remplacer l'écran de compte maison actuel (voir
+   "Compte et profil" ci-dessus), notamment vu les données sensibles
+   (sexe) — permettrait aussi d'écrire des règles Firestore qui vérifient
+   l'identité de l'appelant (`request.auth.uid`) plutôt qu'un simple verrou
+   anonyme partagé par tout le monde.
 3. **Déployer le petit serveur `server/`** (push/verify/digest) quelque part
    d'accessible publiquement (Render, Fly.io, Railway…) pour que ces
    fonctionnalités marchent aussi hors du poste de développement — permettrait

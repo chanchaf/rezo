@@ -17,6 +17,7 @@ import { initializeApp } from 'firebase/app';
 
 loadEnv({ path: '.env.local' }); // même fichier que Vite (voir .env.example)
 import { getFirestore, doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: process.env.VITE_FIREBASE_API_KEY || 'AIzaSyB1biHofOEhBBPNWAb4lA3fzM1gvd9pgJk',
@@ -29,16 +30,26 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+const auth = getAuth(app);
+
+// Mêmes règles Firestore que le client (request.auth != null) — ce serveur utilise le SDK client
+// (pas firebase-admin, voir le commentaire en tête de fichier), donc il lui faut lui aussi une
+// session, anonyme comme côté navigateur (voir src/lib/firebase.js). Un seul sign-in, réutilisé par
+// tous les appels kv* de ce process (npm run seed, npm run server) — pas un sign-in par appel.
+const authReady = signInAnonymously(auth);
 
 export async function kvGet(key) {
+  await authReady;
   const snap = await getDoc(doc(db, 'kv', key));
   return snap.exists() ? snap.data().value : undefined;
 }
 
 export async function kvSet(key, value) {
+  await authReady;
   await setDoc(doc(db, 'kv', key), { value });
 }
 
 export async function kvDelete(key) {
+  await authReady;
   await deleteDoc(doc(db, 'kv', key));
 }

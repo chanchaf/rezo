@@ -27,7 +27,7 @@
  * Il lit/écrit dans la MÊME collection Firestore via `server/firebaseClient.js`.
  */
 
-import { db } from './firebase.js';
+import { db, authReady } from './firebase.js';
 import { doc, getDoc, setDoc, deleteDoc, collection, query, orderBy, startAt, endAt, getDocs, documentId } from 'firebase/firestore';
 
 const NAMESPACE = 'rezo:data';
@@ -45,6 +45,7 @@ function writeAll(data) {
 }
 
 async function firestoreGet(key) {
+  await authReady;
   const snap = await getDoc(doc(db, 'kv', key));
   if (!snap.exists()) {
     throw new Error(`Key not found: ${key}`);
@@ -53,14 +54,17 @@ async function firestoreGet(key) {
 }
 
 async function firestoreSet(key, value) {
+  await authReady;
   await setDoc(doc(db, 'kv', key), { value });
 }
 
 async function firestoreDelete(key) {
+  await authReady;
   await deleteDoc(doc(db, 'kv', key));
 }
 
 async function firestoreList(prefix) {
+  await authReady;
   const col = collection(db, 'kv');
   const q = prefix
     ? query(col, orderBy(documentId()), startAt(prefix), endAt(prefix + ''))

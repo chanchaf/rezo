@@ -12,16 +12,18 @@
  * est assurée par les règles Firestore (Firebase Console → Firestore
  * Database → Règles), pas par le secret de cette config.
  *
- * ⚠️ Pour ce prototype, les règles doivent autoriser lecture/écriture (mode
- * test ou règles ouvertes) — voir README.md, section Firestore. C'est le
- * même niveau de confiance que l'ancien backend Express (aucune
- * authentification par utilisateur sur les données) : pas une régression,
- * juste un changement d'hébergement. Avant une vraie mise en production,
- * écrire de vraies règles Firestore restrictives.
+ * Les règles Firestore exigent `request.auth != null` — pas une identité
+ * utilisateur réelle (voir la vraie connexion téléphone/e-mail dans
+ * App.jsx, entièrement indépendante de ceci), juste un verrou technique
+ * contre les robots/scripts externes qui liraient/écriraient directement
+ * sans passer par l'app. D'où l'authentification anonyme Firebase
+ * silencieuse ci-dessous (`authReady`) : aucun écran, aucun changement
+ * d'interface, un identifiant technique stable par navigateur/appareil.
  */
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 const env = import.meta.env;
 
@@ -36,3 +38,22 @@ const firebaseConfig = {
 
 export const firebaseApp = initializeApp(firebaseConfig);
 export const db = getFirestore(firebaseApp);
+export const auth = getAuth(firebaseApp);
+
+// Résolu une fois qu'une session (anonyme ou restaurée) est active — à `await` avant tout appel
+// Firestore (voir storagePolyfill.js) pour éviter une course où une lecture/écriture partirait
+// avant que l'authentification anonyme soit établie et échouerait avec "permission-denied".
+export const authReady = new Promise((resolve, reject) => {
+  const unsubscribe = onAuthStateChanged(
+    auth,
+    (user) => {
+      unsubscribe();
+      if (user) {
+        resolve(user);
+      } else {
+        signInAnonymously(auth).then((cred) => resolve(cred.user)).catch(reject);
+      }
+    },
+    reject
+  );
+});
