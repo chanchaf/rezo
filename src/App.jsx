@@ -279,6 +279,44 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+// Centre de notifications (cloche du bandeau) : registre partagé { [destinataire]: [entrée, ...] },
+// même convention que `follows`/`public-profiles`. Distinct du badge de chat non-lu par carte (qui
+// reste local à chaque rencontre) — celui-ci agrège tous les événements (demande, acceptation,
+// message, arrivée, nouvelle rencontre d'un abonnement) en un seul endroit central.
+const NOTIFICATIONS_KEY = 'notifications';
+const MAX_NOTIFICATIONS_PER_USER = 50;
+
+async function addNotification(toName, { kind, title, body, meetupId, chatId }) {
+  try {
+    const res = await window.storage.get(NOTIFICATIONS_KEY, true).catch(() => null);
+    const all = res && res.value ? JSON.parse(res.value) : {};
+    const list = Array.isArray(all[toName]) ? all[toName] : [];
+    const entry = {
+      id: uid(),
+      kind,
+      title,
+      body,
+      meetupId: meetupId || null,
+      chatId: chatId || null,
+      createdAt: new Date().toISOString(),
+      read: false,
+    };
+    all[toName] = [entry, ...list].slice(0, MAX_NOTIFICATIONS_PER_USER);
+    await window.storage.set(NOTIFICATIONS_KEY, JSON.stringify(all), true);
+  } catch (err) {
+    // best effort : la notification push (notifyByName) reste envoyée même si l'historique échoue
+  }
+}
+
+// Point d'entrée unique pour toute notification adressée à un·e utilisateur·rice : envoie le push
+// navigateur existant (notifyByName, best effort, silencieux si refusé/non supporté) ET l'ajoute à
+// son historique persistant (addNotification, visible dans le panneau de la cloche). Fire-and-forget
+// comme le reste des notifications de l'app — n'attend jamais l'action qui la déclenche.
+function notifyUser(toName, { kind, title, body, meetupId, chatId, url }) {
+  notifyByName(toName, title, body, url || '/');
+  addNotification(toName, { kind, title, body, meetupId, chatId });
+}
+
 const ACCOUNTS_KEY = 'accounts';
 
 function isValidEmail(value) {
@@ -697,6 +735,8 @@ export default function RezoApp() {
   // Qui suit qui : { [abonné]: [organisateur1, organisateur2, ...] } — jamais affiché comme liste
   // publique complète (voir Objectif "limite à poser"), seulement utilisé pour compter/vérifier.
   const [follows, setFollows] = useState({});
+  const [myNotifications, setMyNotifications] = useState([]);
+  const [notifPanelOpen, setNotifPanelOpen] = useState(false);
   const [showCirclePage, setShowCirclePage] = useState(false);
   // Langue d'interface : par appareil tant qu'aucun compte n'est connecté, puis synchronisée dans
   // le compte (voir setLanguage) — jamais bloquant, repli FR géré par translate() si une clé manque.
@@ -937,6 +977,61 @@ export default function RezoApp() {
     }
   }, []);
 
+  // Centre de notifications (cloche du bandeau) : ne recharge que la liste du destinataire connecté
+  // (userName), voir NOTIFICATIONS_KEY/addNotification/notifyUser plus haut.
+  const loadNotifications = useCallback(async (silent) => {
+    if (!userName) {
+      setMyNotifications([]);
+      return;
+    }
+    try {
+      const res = await window.storage.get(NOTIFICATIONS_KEY, true);
+      const map = res && res.value ? JSON.parse(res.value) : {};
+      setMyNotifications(Array.isArray(map[userName]) ? map[userName] : []);
+    } catch (err) {
+      if (!silent) setMyNotifications([]);
+    }
+  }, [userName]);
+
+  const unreadNotifCount = myNotifications.filter((n) => !n.read).length;
+
+  // Ouvrir le panneau marque tout comme lu (voir la demande : le badge se réinitialise à
+  // l'ouverture, pas notification par notification) — best effort, l'affichage local est déjà à
+  // jour même si l'écriture partagée échoue.
+  const markAllNotificationsRead = async () => {
+    if (!userName || unreadNotifCount === 0) return;
+    const readList = myNotifications.map((n) => ({ ...n, read: true }));
+    setMyNotifications(readList);
+    try {
+      const res = await window.storage.get(NOTIFICATIONS_KEY, true).catch(() => null);
+      const all = res && res.value ? JSON.parse(res.value) : {};
+      all[userName] = readList;
+      await window.storage.set(NOTIFICATIONS_KEY, JSON.stringify(all), true);
+    } catch (err) {
+      // best effort
+    }
+  };
+
+  const toggleNotifPanel = () => {
+    setNotifPanelOpen((wasOpen) => {
+      const willOpen = !wasOpen;
+      if (willOpen) markAllNotificationsRead();
+      return willOpen;
+    });
+  };
+
+  // Clic sur une notification : direction le chat de la rencontre concernée, qui sert déjà de
+  // point d'entrée central vers une rencontre partout ailleurs dans l'app.
+  const openNotificationTarget = (notif) => {
+    setNotifPanelOpen(false);
+    const meetup = meetups.find((m) => m.id === notif.meetupId);
+    if (!meetup) {
+      showToast(t('toast.meetupDeleted'));
+      return;
+    }
+    openChat(meetup);
+  };
+
   useEffect(() => {
     loadMeetups(false);
     loadProfiles(false);
@@ -945,6 +1040,7 @@ export default function RezoApp() {
     loadPublicCities(false);
     loadPublicProfiles(false);
     loadFollows(false);
+    loadNotifications(false);
     const interval = setInterval(() => {
       if (!savingRef.current) loadMeetups(true);
       loadProfiles(true);
@@ -953,9 +1049,10 @@ export default function RezoApp() {
       loadPublicCities(true);
       loadPublicProfiles(true);
       loadFollows(true);
+      loadNotifications(true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames, loadPublicCities, loadPublicProfiles, loadFollows]);
+  }, [loadMeetups, loadProfiles, loadVerified, loadPublicLastNames, loadPublicCities, loadPublicProfiles, loadFollows, loadNotifications]);
 
   // Détecte les nouvelles arrivées à chaque rafraîchissement et notifie les membres concernés
   // (pas de partage de position continue : uniquement l'événement "est arrivé·e").
@@ -2143,7 +2240,12 @@ export default function RezoApp() {
         const followsMap = followsRes && followsRes.value ? JSON.parse(followsRes.value) : {};
         const followers = Object.keys(followsMap).filter((follower) => (followsMap[follower] || []).includes(name));
         followers.forEach((follower) => {
-          notifyByName(follower, 'REZO', t('toast.newMeetupFromFollowed', { name, title: newMeetups[0].title }), '/');
+          notifyUser(follower, {
+            kind: 'newFromFollowed',
+            title: 'REZO',
+            body: t('toast.newMeetupFromFollowed', { name, title: newMeetups[0].title }),
+            meetupId: newMeetups[0].id,
+          });
         });
       } catch (err) {
         // best effort, la rencontre reste créée même si la notification échoue
@@ -2184,12 +2286,12 @@ export default function RezoApp() {
     );
     await saveMeetups(updated);
     showToast(wantsSeries ? t('toast.seriesJoinedAll') : t('toast.requestSent'));
-    notifyByName(
-      meetup.host,
-      'Nouvelle demande',
-      `${name} veut rejoindre "${meetup.title}"`,
-      '/'
-    );
+    notifyUser(meetup.host, {
+      kind: 'request',
+      title: t('notif.newRequest.title'),
+      body: t('notif.newRequest.body', { name, title: meetup.title }),
+      meetupId: meetup.id,
+    });
   };
 
   const requestOrLeave = (meetup) => {
@@ -2292,12 +2394,12 @@ export default function RezoApp() {
         : t('toast.requestRejected', { name: requesterName })
     );
     if (accept) {
-      notifyByName(
-        requesterName,
-        'Demande acceptée',
-        `Tu as été accepté·e pour "${meetup.title}" !`,
-        '/'
-      );
+      notifyUser(requesterName, {
+        kind: 'accepted',
+        title: t('notif.accepted.title'),
+        body: t('notif.accepted.body', { title: meetup.title }),
+        meetupId: meetup.id,
+      });
     }
   };
 
@@ -2566,7 +2668,14 @@ export default function RezoApp() {
         // notification chat manquée, l'arrivée reste enregistrée
       }
       const others = new Set([meetup.host, ...meetup.participants].filter((p) => p !== name));
-      others.forEach((p) => notifyByName(p, 'Quelqu’un est arrivé', `📍 ${name} est arrivé·e à "${meetup.title}"`, '/'));
+      others.forEach((p) =>
+        notifyUser(p, {
+          kind: 'arrival',
+          title: t('notif.arrival.title'),
+          body: t('notif.arrival.body', { name, title: meetup.title }),
+          meetupId: meetup.id,
+        })
+      );
     } catch (err) {
       showToast(t('toast.arrivalSaveFailed'));
     }
@@ -2733,6 +2842,19 @@ export default function RezoApp() {
         setChatMessages(updated);
         markChatRead(chatMeetup.id, updated.length);
         setChatInput('');
+        const otherMembers = new Set(
+          [chatMeetup.host, ...chatMeetup.participants].filter((p) => p !== name)
+        );
+        const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+        otherMembers.forEach((p) =>
+          notifyUser(p, {
+            kind: 'chat',
+            title: t('notif.newMessage.title'),
+            body: t('notif.newMessage.body', { name, text: preview }),
+            meetupId: chatMeetup.id,
+            chatId: chatMeetup.id,
+          })
+        );
       } catch (err) {
         showToast(t('toast.chatSendFailed'));
       } finally {
@@ -3355,7 +3477,12 @@ export default function RezoApp() {
           flex-wrap: wrap;
           background: var(--ink);
           position: relative;
-          z-index: 1;
+          /* Doit rester au-dessus de tout ce qui peut défiler sous lui dans .rezo-scroll (barre de
+             recherche sticky à 1, menus déroulants jusqu'à 10) pour que le panneau de notifications
+             (enfant du header) ne se retrouve jamais recouvert — tout en restant sous .profile-page
+             (12), qui doit pouvoir couvrir tout l'écran, header compris. Aucun effet visuel en
+             mobile : le header ne chevauche jamais le contenu qui défile en usage normal. */
+          z-index: 11;
         }
         .rezo-brand {
           font-family: 'Space Grotesk', sans-serif;
@@ -3368,6 +3495,51 @@ export default function RezoApp() {
         }
         .rezo-brand span.dot { color: var(--live); }
         .rezo-tagline { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+        /* Cloche de notifications : position absolue (pas un enfant flex normal) pour rester
+           épinglée en haut à droite, alignée avec "REZO" et le sous-titre, sans perturber le
+           space-between entre le bloc de marque et .rezo-live (qui redevient ainsi les deux seuls
+           enfants normaux du flex, exactement comme avant). */
+        .rezo-header-notif {
+          position: absolute; top: calc(18px + env(safe-area-inset-top)); right: 24px; z-index: 2;
+        }
+        [dir="rtl"] .rezo-header-notif { right: auto; left: 24px; }
+        .notif-bell-btn {
+          position: relative; width: 34px; height: 34px; border-radius: 50%;
+          background: var(--card); border: 1px solid var(--border); color: var(--text);
+          display: flex; align-items: center; justify-content: center; cursor: pointer;
+        }
+        .notif-bell-badge {
+          position: absolute; top: -4px; inset-inline-end: -4px;
+          background: var(--danger); color: #fff; font-size: 10px; font-weight: 700;
+          border-radius: 999px; min-width: 16px; height: 16px; padding: 0 3px;
+          display: flex; align-items: center; justify-content: center;
+          border: 2px solid var(--ink);
+        }
+        .notif-panel-backdrop { position: absolute; inset: 0; z-index: 14; }
+        .notif-panel {
+          position: absolute; top: calc(100% + 8px); right: 0; z-index: 15;
+          width: 320px; max-width: calc(100vw - 48px); max-height: 420px; overflow-y: auto;
+          background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+          box-shadow: 0 16px 40px rgba(0,0,0,0.18);
+        }
+        [dir="rtl"] .notif-panel { right: auto; left: 0; }
+        .notif-panel-header {
+          font-family: 'Space Grotesk', sans-serif; font-size: 13.5px; font-weight: 700;
+          padding: 14px 16px 10px;
+        }
+        .notif-panel-empty { padding: 24px 16px; font-size: 12.5px; color: var(--muted); text-align: center; }
+        .notif-panel-list { display: flex; flex-direction: column; }
+        .notif-panel-item {
+          display: block; width: 100%; text-align: start; background: none; border: none;
+          border-top: 1px solid var(--border); padding: 11px 16px; cursor: pointer;
+          font-family: 'Inter', sans-serif;
+        }
+        .notif-panel-item:hover { background: var(--card-hover); }
+        .notif-panel-item.unread { background: rgba(var(--live-rgb), 0.05); }
+        .notif-panel-item-title { font-size: 12.5px; font-weight: 700; color: var(--text); }
+        .notif-panel-item-body { font-size: 12px; color: var(--muted); margin-top: 2px; }
+        .notif-panel-item-time { font-size: 10.5px; color: var(--muted); margin-top: 4px; opacity: 0.8; }
 
         .rezo-live {
           display: flex; align-items: center; gap: 6px;
@@ -4582,6 +4754,45 @@ export default function RezoApp() {
         <div>
           <div className="rezo-brand">REZO<span className="dot">·</span></div>
           <div className="rezo-tagline">{t('app.tagline')}</div>
+        </div>
+        <div className="rezo-header-notif">
+          <button
+            type="button"
+            className="notif-bell-btn"
+            onClick={toggleNotifPanel}
+            aria-label={t('notif.title')}
+          >
+            <Bell size={19} />
+            {unreadNotifCount > 0 && (
+              <span className="notif-bell-badge">{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</span>
+            )}
+          </button>
+          {notifPanelOpen && (
+            <>
+              <div className="notif-panel-backdrop" onClick={() => setNotifPanelOpen(false)}></div>
+              <div className="notif-panel">
+                <div className="notif-panel-header">{t('notif.title')}</div>
+                {myNotifications.length === 0 ? (
+                  <div className="notif-panel-empty">{t('notif.empty')}</div>
+                ) : (
+                  <div className="notif-panel-list">
+                    {myNotifications.map((n) => (
+                      <button
+                        key={n.id}
+                        type="button"
+                        className={`notif-panel-item ${n.read ? '' : 'unread'}`}
+                        onClick={() => openNotificationTarget(n)}
+                      >
+                        <div className="notif-panel-item-title">{n.title}</div>
+                        <div className="notif-panel-item-body">{n.body}</div>
+                        <div className="notif-panel-item-time">{formatWhen(n.createdAt, language)}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
         <div className="rezo-live">
           <span className="pulse"></span>

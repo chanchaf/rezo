@@ -431,6 +431,37 @@ mesures pour ne jamais montrer un mur sans solution :
    côté client à partir de l'historique des rencontres déjà stocké, aucune
    donnée supplémentaire nécessaire.
 
+## Centre de notifications (cloche du bandeau)
+
+Icône cloche dans le bandeau du haut, alignée avec "REZO" et le sous-titre —
+badge rouge avec le nombre de notifications non lues, tap pour ouvrir un
+panneau déroulant listant l'historique récent (jusqu'à 50 par personne),
+chacune cliquable pour aller directement au chat de la rencontre concernée.
+Ouvrir le panneau marque tout comme lu (pas de marquage notification par
+notification).
+
+- **Registre partagé** `notifications` = `{ [destinataire]: [entrée, ...] }`,
+  même convention que `follows`/`public-profiles` (voir `NOTIFICATIONS_KEY`,
+  `addNotification` dans `App.jsx`).
+- **Point d'entrée unique** `notifyUser(toName, {...})` : envoie le push
+  navigateur existant (`notifyByName`, best effort) **et** ajoute l'entrée à
+  l'historique persistant — les deux anciens appels directs à `notifyByName`
+  (nouvelle demande, demande acceptée, arrivée signalée, nouvelle rencontre
+  d'un abonnement) passent maintenant par ce point d'entrée unique, plus un
+  nouveau déclencheur ajouté pour les messages de chat (qui n'envoyait
+  auparavant aucune notification du tout).
+- **Distinct du badge de chat par carte** (compteur de messages non lus
+  local à chaque rencontre, déjà existant) : la cloche agrège tous les
+  événements de toutes les rencontres en un seul endroit, les deux badges
+  coexistent indépendamment sur une même carte.
+- ⚠️ Bug de z-index rencontré et corrigé pendant ce travail : le panneau
+  (enfant de `.rezo-header`) se retrouvait recouvert par la barre de
+  recherche sticky dès qu'elle défilait dessous, les deux ayant le même
+  z-index dans deux contextes d'empilement différents — corrigé en
+  augmentant le z-index de `.rezo-header` (1 → 11) pour qu'il reste
+  au-dessus de tout ce qui peut défiler sous lui, sans dépasser
+  `.profile-page` (12) qui doit pouvoir le couvrir entièrement.
+
 ## Couche sociale : fidélité et liens réels
 
 Trois fonctionnalités qui récompensent la fidélité et les liens déjà vécus
