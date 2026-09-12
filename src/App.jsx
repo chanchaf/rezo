@@ -11,8 +11,15 @@ import { isPushSupported, getExistingPushSubscription, subscribeToPush, unsubscr
 import { requestPhoneCode, confirmPhoneCode } from './lib/verify.js';
 import { LANGUAGES, translate, detectBrowserLanguage, dirForLanguage } from './lib/i18n.js';
 import { PHONE_AUTH_ENABLED } from './lib/config.js';
-import { auth } from './lib/firebase.js';
-import { GoogleAuthProvider, FacebookAuthProvider, signInWithPopup } from 'firebase/auth';
+import { auth, authReady } from './lib/firebase.js';
+import {
+  GoogleAuthProvider,
+  FacebookAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+} from 'firebase/auth';
 
 // Large éventail d'activités pour toucher un public international aux intérêts variés
 // (inspiré des catégories des grandes apps de meetup) tout en restant scannable dans une seule
@@ -360,6 +367,27 @@ const OAUTH_ERROR_MESSAGES = {
 
 function oauthErrorMessage(err) {
   return OAUTH_ERROR_MESSAGES[err?.code] || err?.message || 'Connexion impossible, réessaie.';
+}
+
+// Miroir Firebase Auth réel, utilisé UNIQUEMENT pour la vérification d'e-mail — sendEmailVerification
+// et emailVerified n'existent que sur un vrai utilisateur Firebase Auth, jamais sur la session
+// anonyme technique déjà en place pour les règles Firestore (voir authReady dans lib/firebase.js).
+// Le mot de passe reste géré par notre propre registre `accounts` (hash SHA-256, voir loadAccounts/
+// saveAccounts) : ce miroir ne sert jamais à l'authentification elle-même, seulement à suivre l'état
+// de vérification — une erreur ici ne doit donc jamais bloquer une vraie connexion/inscription.
+async function syncFirebaseEmailAuth(email, password) {
+  try {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    return cred.user.emailVerified;
+  } catch (err) {
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      await sendEmailVerification(cred.user);
+      return cred.user.emailVerified;
+    } catch (err2) {
+      return false;
+    }
+  }
 }
 
 async function loadAccounts() {
@@ -767,6 +795,10 @@ export default function RezoApp() {
   const [userAvatar, setUserAvatar] = useState(null);
   const [userPhone, setUserPhone] = useState(null);
   const [userPhoneVerified, setUserPhoneVerified] = useState(false);
+  // Reflète l'e-mail Firebase Auth réel (voir syncFirebaseEmailAuth) — jamais persisté nous-mêmes :
+  // la session Firebase Auth (IndexedDB) suffit d'un chargement à l'autre, voir l'effet de montage.
+  const [userEmailVerified, setUserEmailVerified] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
   const [userEmail, setUserEmail] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   // 'email' (Connexion/Inscription, seul point d'entrée maintenant que le choix de méthode est
@@ -1141,9 +1173,13 @@ export default function RezoApp() {
 
   useEffect(() => {
     (async () => {
+      let sessionEmail = null;
       try {
         const res = await window.storage.get('rezo-email', false);
-        if (res && res.value) setUserEmail(res.value);
+        if (res && res.value) {
+          setUserEmail(res.value);
+          sessionEmail = res.value;
+        }
       } catch (err) {
         // no session yet
       }
@@ -1246,6 +1282,21 @@ export default function RezoApp() {
         }
       } catch (err) {
         setLanguageState(detectBrowserLanguage());
+      }
+      // Reflète un lien de vérification cliqué entre-temps (voir syncFirebaseEmailAuth) : la session
+      // Firebase Auth réelle créée à la connexion/inscription persiste seule (IndexedDB) d'un
+      // chargement à l'autre — on relit juste son état ici, sans mot de passe. "au retour dans
+      // l'app, ou au prochain rafraîchissement" (demande produit) est donc couvert par ce montage.
+      if (sessionEmail && isValidEmail(sessionEmail)) {
+        try {
+          await authReady;
+          if (auth.currentUser && !auth.currentUser.isAnonymous && auth.currentUser.email === sessionEmail) {
+            await auth.currentUser.reload();
+            setUserEmailVerified(auth.currentUser.emailVerified);
+          }
+        } catch (err) {
+          // best effort — n'empêche jamais le reste de l'app de fonctionner
+        }
       }
     })();
   }, []);
@@ -1846,6 +1897,9 @@ export default function RezoApp() {
       await saveAccounts(accounts);
       await window.storage.set('rezo-email', email, false);
       setUserEmail(email);
+      // Envoie le vrai e-mail de vérification Firebase (voir syncFirebaseEmailAuth) — jamais
+      // bloquant : le compte (registre `accounts` fait maison) est déjà créé à ce stade.
+      syncFirebaseEmailAuth(email, authPassword).then(setUserEmailVerified);
       setShowAuthModal(false);
       setNameDraft(firstName);
       setLastNameDraft(lastName);
@@ -1930,6 +1984,10 @@ export default function RezoApp() {
         await saveAccounts(accounts);
       }
       setUserEmail(email);
+      // Rétablit/crée la session Firebase Auth miroir pour lire le vrai emailVerified (voir
+      // syncFirebaseEmailAuth) — migre au passage un compte créé avant l'existence de cette
+      // fonctionnalité, jamais bloquant pour la connexion elle-même.
+      syncFirebaseEmailAuth(email, authPassword).then(setUserEmailVerified);
       setUserName(name || null);
       setUserLastName(lastName || null);
       setUserCountry(country);
@@ -2142,6 +2200,9 @@ export default function RezoApp() {
       if (phone) await window.storage.set('rezo-phone', phone, false);
       await window.storage.set('rezo-phone-verified', phoneVerified ? 'true' : 'false', false);
       setUserEmail(email);
+      // Google/Facebook sont considérés vérifiés d'office (emailVerified déjà à true côté
+      // fournisseur) — aucune étape supplémentaire, contrairement à l'e-mail/mot de passe.
+      setUserEmailVerified(!!oauthUser.emailVerified);
       setUserName(name || null);
       setUserLastName(lastName || null);
       setUserCountry(country);
@@ -2191,6 +2252,19 @@ export default function RezoApp() {
     showToast(t('toast.legalPlaceholder', { label }));
   };
 
+  const resendVerificationEmail = async () => {
+    if (!auth.currentUser) return;
+    setResendingVerification(true);
+    try {
+      await sendEmailVerification(auth.currentUser);
+      showToast(t('toast.emailResent'));
+    } catch (err) {
+      showToast(err?.code === 'auth/too-many-requests' ? t('toast.emailResentTooMany') : t('toast.saveError'));
+    } finally {
+      setResendingVerification(false);
+    }
+  };
+
   const logout = async () => {
     try {
       await window.storage.delete('rezo-email', false).catch(() => {});
@@ -2211,6 +2285,7 @@ export default function RezoApp() {
     setUserAvatar(null);
     setUserPhone(null);
     setUserPhoneVerified(false);
+    setUserEmailVerified(false);
     setShowNameModal(false);
     setShowProfilePage(false);
     setShowSettingsSheet(false);
@@ -2305,10 +2380,11 @@ export default function RezoApp() {
         await saveAccounts(accounts);
       }
       // Registre partagé "nom -> vérifié", pour afficher le badge sur les cartes sans exposer
-      // le numéro lui-même à personne d'autre que son propriétaire.
+      // le numéro/l'e-mail lui-même à personne d'autre que son propriétaire. Vérifié par téléphone
+      // OU par e-mail (voir syncFirebaseEmailAuth) compte comme "Vérifié" — l'un ou l'autre suffit.
       const verifiedRes = await window.storage.get('verified-map', true).catch(() => null);
       const nextVerifiedMap = verifiedRes && verifiedRes.value ? JSON.parse(verifiedRes.value) : {};
-      if (phoneVerifiedDraft) nextVerifiedMap[trimmed] = true;
+      if (phoneVerifiedDraft || userEmailVerified) nextVerifiedMap[trimmed] = true;
       else delete nextVerifiedMap[trimmed];
       await window.storage.set('verified-map', JSON.stringify(nextVerifiedMap), true);
       setVerifiedMap(nextVerifiedMap);
@@ -2409,6 +2485,12 @@ export default function RezoApp() {
 
   const handleCreate = (form) => {
     requireName(async (name, gender) => {
+      // Vérification requise pour créer (pas pour modifier une rencontre déjà créée) — cohérent avec
+      // la vérification en général : téléphone OU e-mail suffit (voir syncFirebaseEmailAuth).
+      if (!editingMeetup && isValidEmail(userEmail) && !userEmailVerified && !userPhoneVerified) {
+        showToast(t('toast.emailVerificationRequiredCreate'));
+        return;
+      }
       let audience = form.audience || 'mixte';
       // Sécurité : une femme ne peut pas publier une rencontre 100% Hommes, et inversement,
       // même si le choix a été fait avant que le sexe soit confirmé.
@@ -2595,6 +2677,12 @@ export default function RezoApp() {
         return;
       }
       const audience = meetup.audience || 'mixte';
+      // Vérification requise pour rejoindre une rencontre réservée à un sexe (pas les mixtes) —
+      // cohérent avec la vérification en général : téléphone OU e-mail suffit.
+      if (audience !== 'mixte' && isValidEmail(userEmail) && !userEmailVerified && !userPhoneVerified) {
+        showToast(t('toast.emailVerificationRequiredJoin'));
+        return;
+      }
       if (audience === 'femmes' && gender !== 'femme') {
         showToast(t('toast.womenOnly'));
         return;
@@ -2783,7 +2871,7 @@ export default function RezoApp() {
   const profileCountry = isOwnProfile ? userCountry : (viewedPublicProfile.country || '');
   const profileCity = isOwnProfile ? userCity : (publicCities[profileTargetName] || '');
   const profileLastName = isOwnProfile ? userLastName : (publicLastNames[profileTargetName] || '');
-  const profileVerified = isOwnProfile ? userPhoneVerified : !!verifiedMap[profileTargetName];
+  const profileVerified = isOwnProfile ? (userPhoneVerified || userEmailVerified) : !!verifiedMap[profileTargetName];
   const profileFollowersCount = Object.keys(follows).filter((follower) => (follows[follower] || []).includes(profileTargetName)).length;
   const isFollowingProfile = !!(follows[userName] || []).includes(profileTargetName);
 
@@ -4275,6 +4363,19 @@ export default function RezoApp() {
         }
         .rezo-fallback-banner svg { flex-shrink: 0; color: var(--live); }
 
+        .email-verify-banner {
+          flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          background: rgba(242,166,90,0.12); border-bottom: 1px solid rgba(242,166,90,0.35);
+          padding: 10px 24px; font-size: 12.5px; color: var(--text); flex-wrap: wrap;
+        }
+        .email-verify-banner strong { font-weight: 700; }
+        .email-verify-resend-btn {
+          flex-shrink: 0; background: var(--amber); color: #fff; border: none; border-radius: 999px;
+          padding: 7px 14px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .email-verify-resend-btn:hover:not(:disabled) { filter: brightness(0.95); }
+        .email-verify-resend-btn:disabled { opacity: 0.6; cursor: default; }
+
         .bottom-nav {
           flex-shrink: 0;
           position: relative;
@@ -4978,10 +5079,11 @@ export default function RezoApp() {
           .rezo-app {
             display: grid;
             grid-template-columns: var(--nav-w) 1fr;
-            grid-template-rows: auto 1fr;
-            grid-template-areas: "nav header" "nav scroll";
+            grid-template-rows: auto auto 1fr;
+            grid-template-areas: "nav header" "nav banner" "nav scroll";
           }
           .rezo-header { grid-area: header; }
+          .email-verify-banner { grid-area: banner; }
           .rezo-scroll { grid-area: scroll; }
 
           /* Nav du bas -> sidebar fixe à gauche (colonne "nav" du grid ci-dessus, pleine hauteur —
@@ -5146,6 +5248,22 @@ export default function RezoApp() {
           {t('app.liveSync')}{lastSync ? ` · ${t('app.liveSyncAt', { time: lastSync.toLocaleTimeString(WHEN_LOCALES[language] || 'fr-FR', { hour: '2-digit', minute: '2-digit' }) })}` : ''}
         </div>
       </div>
+
+      {userEmail && isValidEmail(userEmail) && !userEmailVerified && (
+        <div className="email-verify-banner">
+          <span>
+            {interpolateNodes(t('verify.emailBanner'), { email: <strong>{userEmail}</strong> })}
+          </span>
+          <button
+            type="button"
+            className="email-verify-resend-btn"
+            disabled={resendingVerification}
+            onClick={resendVerificationEmail}
+          >
+            {resendingVerification ? '…' : t('verify.resendEmail')}
+          </button>
+        </div>
+      )}
 
       <div className="rezo-scroll">
       <div className="rezo-controls">

@@ -9,8 +9,9 @@
  * (même algorithme de hash, même forme de compte, mêmes clés) pour qu'un compte créé ou connecté
  * ici soit repris correctement par App.jsx au rechargement (voir handoff() ci-dessous).
  */
-import { db, authReady } from './firebase.js';
+import { db, auth, authReady } from './firebase.js';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 
 const ACCOUNTS_KEY = 'accounts';
 
@@ -33,6 +34,27 @@ export function isValidEmail(value) {
 // moins une lettre et un chiffre — dupliquée ici pour la même raison que le reste du fichier.
 export function isPasswordStrongEnough(password) {
   return /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(password || '');
+}
+
+// Miroir Firebase Auth réel, utilisé UNIQUEMENT pour la vérification d'e-mail (sendEmailVerification/
+// emailVerified n'existent que sur un vrai utilisateur Firebase Auth, jamais sur la session anonyme
+// technique déjà en place — voir authReady). Dupliqué depuis App.jsx (voir syncFirebaseEmailAuth) —
+// contrainte d'isolation totale entre les deux fichiers. Le mot de passe reste géré par notre propre
+// registre `accounts` (hash SHA-256) : ce miroir ne sert jamais à l'authentification elle-même. App.jsx
+// relit l'état de vérification à son montage après le rechargement (session Firebase Auth persistée),
+// donc pas besoin de renvoyer emailVerified ici.
+async function syncFirebaseEmailAuth(email, password) {
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+  } catch (err) {
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      await sendEmailVerification(cred.user);
+    } catch (err2) {
+      // Rôle purement accessoire : une erreur ici ne doit jamais bloquer la vraie connexion/
+      // inscription, qui repose sur le registre `accounts` fait maison.
+    }
+  }
 }
 
 export async function hashPassword(password) {
@@ -139,6 +161,11 @@ export async function createEmailAccount(email, password, language, profile = {}
   };
   await saveAccounts(accounts);
   applySessionToLocalStorage(trimmed, accounts[trimmed]);
+  // Envoie le vrai e-mail de vérification Firebase. Attendu (contrairement à App.jsx où l'équivalent
+  // ne bloque pas l'UI) : ici la page se recharge juste après (voir finishAuth() dans WebAuth.jsx),
+  // et App.jsx doit trouver la session Firebase Auth déjà établie à son montage pour afficher le bon
+  // état de vérification dès le premier chargement.
+  await syncFirebaseEmailAuth(trimmed, password);
   return trimmed;
 }
 
@@ -150,6 +177,9 @@ export async function loginEmailAccount(email, password) {
   const passwordHash = await hashPassword(password);
   if (passwordHash !== account.passwordHash) throw new Error('Mot de passe incorrect.');
   applySessionToLocalStorage(trimmed, account);
+  // Rétablit/crée la session Firebase Auth miroir pour que App.jsx puisse lire le vrai emailVerified
+  // à son montage après le rechargement — migre au passage un compte créé avant cette fonctionnalité.
+  await syncFirebaseEmailAuth(trimmed, password);
   return trimmed;
 }
 

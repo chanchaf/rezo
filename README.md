@@ -384,6 +384,40 @@ un prototype d'écran d'auth ; **avant toute mise en production**, le
 remplacer par une vraie authentification serveur (Firebase Auth, Supabase
 Auth, NextAuth, etc.) qui hache et vérifie les mots de passe côté serveur.
 
+## Vérification d'e-mail (badge "Vérifié")
+
+Le mot de passe reste géré par le registre `accounts` fait maison (voir
+ci-dessus), mais chaque compte e-mail est désormais **doublé d'un vrai
+utilisateur Firebase Auth**, uniquement pour la vérification — voir
+`syncFirebaseEmailAuth` dans `App.jsx` et `src/lib/webAuth.js` (dupliqué,
+même contrainte d'isolation que le reste). À l'inscription comme à la
+connexion, l'app tente `signInWithEmailAndPassword` puis, si l'utilisateur
+Firebase Auth n'existe pas encore (compte créé avant cette fonctionnalité, ou
+première inscription), retombe sur `createUserWithEmailAndPassword` +
+`sendEmailVerification` — jamais bloquant : une erreur ici n'empêche jamais la
+vraie connexion/inscription, qui reste décidée par le registre `accounts`.
+
+Tant que `user.emailVerified` est `false` :
+- un bandeau persistant s'affiche sous l'en-tête ("Vérifie ton e-mail…" +
+  bouton "Renvoyer l'e-mail", voir `.email-verify-banner`) ;
+- créer une rencontre, ou rejoindre une rencontre réservée à un sexe (100%
+  Femmes/Hommes — pas les mixtes), est bloqué avec un message clair (voir les
+  gardes dans `handleCreate`/`requestOrLeave`) ;
+- consulter le flux et compléter son profil restent autorisés.
+
+Google/Facebook sont considérés vérifiés d'office (`emailVerified` déjà à
+`true` côté fournisseur, lu directement depuis `signInWithPopup`), sans étape
+supplémentaire.
+
+L'état de vérification n'est **jamais persisté nous-mêmes** : la session
+Firebase Auth réelle (IndexedDB) suffit d'un chargement à l'autre — l'effet de
+montage de `App.jsx` fait juste `auth.currentUser.reload()` pour relire l'état
+à jour après qu'un lien de vérification a été cliqué ("au retour dans l'app,
+ou au prochain rafraîchissement"). Le badge "Vérifié" du profil (déjà prévu
+pour le téléphone, voir plus haut) accepte maintenant l'un OU l'autre —
+téléphone vérifié OU e-mail vérifié suffit, cohérent vu que le téléphone est
+actuellement désactivé (`PHONE_AUTH_ENABLED = false`).
+
 ## Langue et RTL
 
 Sélecteur de langue (drapeau + code, ex: 🇫🇷 FR) discret en haut de l'écran de
