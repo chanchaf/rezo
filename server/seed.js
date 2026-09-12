@@ -37,22 +37,28 @@ function inDaysAt(days, hour, minute = 0) {
 
 // 15 rencontres variées (activité, ville, horaire) pour donner tout de suite
 // une impression de vie sur le flux, dans plusieurs villes marocaines.
+// `coords` : uniquement pour les entrées avec un `location` précis (nom d'établissement) — une
+// rencontre sans lieu précis (juste une zone/quartier) n'a pas de coordonnées exactes à donner, tout
+// comme une vraie rencontre créée sans passer par l'autocomplétion d'adresse (voir useGeoSuggest dans
+// App.jsx). Coordonnées approximatives de vrais lieux/quartiers de Casablanca et Rabat — suffisant
+// pour une démo de tri par distance, pas pour de la navigation ; à corriger avec de vraies adresses
+// géocodées avant un vrai lancement (voir l'avertissement en tête de ce fichier).
 const SEED_MEETUPS = [
-  { title: 'Foot 5 vs 5 entre nouveaux arrivants', activity: 'sport', zone: 'Maarif, Casablanca', location: 'Complexe sportif Anfa', days: 1, hour: 19, note: 'Niveau détente, tout le monde est bienvenu.' },
-  { title: 'Randonnée matinale au Parc de la Ligue Arabe', activity: 'randonnee', zone: 'Gauthier, Casablanca', location: 'Parc de la Ligue Arabe', days: 2, hour: 8, note: 'Rythme tranquille, environ 1h30.' },
-  { title: 'Café polyglotte — échange de langues', activity: 'langues', zone: 'Centre-ville, Rabat', location: 'Café Van Dyck', days: 1, hour: 18, note: 'Français, anglais, darija — tous niveaux.' },
+  { title: 'Foot 5 vs 5 entre nouveaux arrivants', activity: 'sport', zone: 'Maarif, Casablanca', location: 'Complexe sportif Anfa', coords: { lat: 33.5883, lng: -7.6114 }, days: 1, hour: 19, note: 'Niveau détente, tout le monde est bienvenu.' },
+  { title: 'Randonnée matinale au Parc de la Ligue Arabe', activity: 'randonnee', zone: 'Gauthier, Casablanca', location: 'Parc de la Ligue Arabe', coords: { lat: 33.5892, lng: -7.6215 }, days: 2, hour: 8, note: 'Rythme tranquille, environ 1h30.' },
+  { title: 'Café polyglotte — échange de langues', activity: 'langues', zone: 'Centre-ville, Rabat', location: 'Café Van Dyck', coords: { lat: 34.0209, lng: -6.8416 }, days: 1, hour: 18, note: 'Français, anglais, darija — tous niveaux.' },
   { title: 'Soirée jeux de société', activity: 'jeux', zone: 'Agdal, Rabat', location: null, days: 3, hour: 19, note: 'Ramène ton jeu préféré si tu en as un.' },
-  { title: 'Sortie photo au coucher du soleil', activity: 'photo', zone: 'Corniche, Casablanca', location: 'Corniche Ain Diab', days: 4, hour: 18, note: 'Débutants bienvenus, prêt de matériel possible sur place.' },
+  { title: 'Sortie photo au coucher du soleil', activity: 'photo', zone: 'Corniche, Casablanca', location: 'Corniche Ain Diab', coords: { lat: 33.5896, lng: -7.6817 }, days: 4, hour: 18, note: 'Débutants bienvenus, prêt de matériel possible sur place.' },
   { title: 'Yoga en plein air', activity: 'bienetre', zone: 'Parc Murdoch, Casablanca', location: null, days: 2, hour: 9, note: 'Tapis non fourni pour l’instant.' },
   { title: 'Dégustation street food', activity: 'food', zone: 'Habous, Casablanca', location: null, days: 5, hour: 20, note: 'On teste 3-4 adresses ensemble.' },
-  { title: 'Meetup développeurs & tech', activity: 'tech', zone: 'Technopark, Casablanca', location: 'Technopark Casablanca', days: 6, hour: 18, note: 'Pitchs courts + networking informel.' },
+  { title: 'Meetup développeurs & tech', activity: 'tech', zone: 'Technopark, Casablanca', location: 'Technopark Casablanca', coords: { lat: 33.5340, lng: -7.6580 }, days: 6, hour: 18, note: 'Pitchs courts + networking informel.' },
   { title: 'Ciné-club en plein air', activity: 'cinema', zone: 'Marina, Casablanca', location: null, days: 7, hour: 20, note: 'Film à confirmer selon les votes du groupe.' },
   { title: 'Balade et musique acoustique', activity: 'musique', zone: 'Guéliz, Marrakech', location: null, days: 3, hour: 19, note: 'Amène ton instrument si tu joues.' },
   { title: 'Visite guidée de la Médina', activity: 'culture', zone: 'Médina, Marrakech', location: null, days: 4, hour: 10, note: 'Petit groupe, rythme adapté à tous.' },
   { title: 'Networking jeunes pros', activity: 'business', zone: 'Centre-ville, Rabat', location: null, days: 8, hour: 18, note: 'Tous secteurs bienvenus.' },
   { title: 'Balade avec nos chiens', activity: 'animaux', zone: 'Parc Lalla Hasna, Fès', location: null, days: 2, hour: 17, note: 'Chiens tenus en laisse dans les zones fréquentées.' },
   { title: 'Brunch en famille', activity: 'famille', zone: 'Ville Nouvelle, Fès', location: null, days: 6, hour: 11, note: 'Enfants bienvenus, espace de jeu à proximité.' },
-  { title: 'Club lecture — roman du mois', activity: 'lecture', zone: 'Maarif, Casablanca', location: 'Café littéraire Reprise', days: 9, hour: 19, note: 'Le livre du mois est annoncé sur le chat du groupe.' },
+  { title: 'Club lecture — roman du mois', activity: 'lecture', zone: 'Maarif, Casablanca', location: 'Café littéraire Reprise', coords: { lat: 33.5883, lng: -7.6114 }, days: 9, hour: 19, note: 'Le livre du mois est annoncé sur le chat du groupe.' },
 ];
 
 async function main() {
@@ -81,7 +87,7 @@ async function main() {
     participantGenders: {},
     pendingRequests: [],
     createdAt: new Date().toISOString(),
-    coords: null,
+    coords: s.coords || null,
   }));
 
   if (toAdd.length === 0) {

@@ -515,6 +515,28 @@ l'avance un lieu où l'on ne se trouve pas encore).
   "Cette semaine", "Plus tard"), sans qu'un rafraîchissement de page soit
   nécessaire — la distance et le tri se recalculent immédiatement à partir de
   la position fraîchement récupérée, dès qu'elle arrive.
+- **État du bouton piloté par le résultat réel** (`geoStatus` : `'idle'` |
+  `'loading'` | `'success'` | `'error'`), jamais deviné à partir d'un autre
+  état — le bouton n'affiche "📍 Position activée" (vert) que si
+  `geoStatus === 'success'` ; en cas d'échec avec repli ville, il affiche
+  "📍 Tri par ville actif" en style neutre (jamais vert), et le titre de la
+  section devient "Près de {ville}" au lieu de "Trié par distance depuis ta
+  position actuelle". Diagnostic (`console.log`/`console.warn`, avec
+  `error.code`/`error.message` sur l'échec) à chaque étape du flux — clic,
+  requête, succès/échec — conservé dans `activateNearMe` pour vérifier
+  facilement en conditions réelles ce que fait vraiment le navigateur.
+- **Distance calculée pour toute rencontre géolocalisée, peu importe
+  l'organisateur** — y compris "Équipe REZO" : `nearMeMeetups` part de
+  `coreFiltered` (filtres audience/âge/date uniquement), jamais de `filtered`
+  (qui inclut le rayon manuel de la feuille "Filtres", une fonctionnalité
+  séparée) — sans quoi une rencontre géolocalisée à plus de 5 km de la
+  position active disparaissait silencieusement de "Activités proches de
+  moi" au lieu de simplement remonter plus bas dans le tri proche+bientôt.
+  Les rencontres semées (`server/seed.js`) avec un lieu précis (pas juste une
+  zone) ont maintenant de vraies coordonnées approximatives — avant, `coords`
+  valait toujours `null` pour tout le contenu de démarrage, y compris celles
+  avec une adresse en apparence précise ("Corniche Ain Diab, Casablanca"),
+  qui n'affichaient donc jamais de distance.
 
 ## Éviter la "ville fantôme" (flux vide au lancement)
 

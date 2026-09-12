@@ -869,8 +869,14 @@ export default function RezoApp() {
   const [userCoords, setUserCoords] = useState(null);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState(null);
-  // Tri "près de moi" : basé sur la ville déclarée (fiable, toujours disponible), le GPS n'étant
-  // qu'un bonus optionnel pour affiner le tri à l'intérieur du groupe "même ville" (voir activateNearMe).
+  // Résultat réel du DERNIER appel à navigator.geolocation.getCurrentPosition (voir activateNearMe)
+  // — 'idle' (jamais tenté) | 'loading' | 'success' (vraie position GPS obtenue) | 'error' (refusée/
+  // indisponible, replié sur la ville). Piloté strictement par le callback succès/erreur, jamais
+  // supposé : sert à distinguer visuellement "position GPS active" de "repli ville" (bouton vert
+  // uniquement sur 'success', jamais sur 'error' même si le tri par ville fonctionne quand même).
+  const [geoStatus, setGeoStatus] = useState('idle');
+  // "Près de moi" est engagé (résultats affichés) dès que la position GPS a réussi OU que le repli
+  // ville a pris le relais après un échec — geoStatus distingue lequel des deux pour l'affichage.
   const [nearMeActive, setNearMeActive] = useState(false);
   const [radiusKm, setRadiusKm] = useState(5);
   const [showPast, setShowPast] = useState(false);
@@ -1694,33 +1700,50 @@ export default function RezoApp() {
   // seulement gardé en mémoire pour la session en cours, voir l'effet de montage). Si l'utilisateur
   // s'est déplacé depuis la dernière activation, la nouvelle position reflète l'endroit actuel. La
   // ville déclarée au profil ne sert que de filet de sécurité si la géolocalisation échoue/est
-  // refusée (voir nearMeMeetups) — jamais de position par défaut ni de repli manuel.
+  // refusée (voir nearMeMeetups) — jamais de position par défaut ni de repli manuel. geoStatus reflète
+  // fidèlement le résultat RÉEL du callback succès/erreur (jamais deviné) — voir son état plus haut.
+  // Logs volontairement bavards à chaque étape (clic -> requête -> succès/échec avec code+message) :
+  // diagnostic demandé pour vérifier si getCurrentPosition échoue vraiment, ou si un succès réel est
+  // ignoré/écrasé ailleurs — à retirer une fois le comportement confirmé en conditions réelles.
   const activateNearMe = () => {
+    console.log('[géoloc] clic sur "Activités proches de moi"');
     setLocating(true);
+    setGeoStatus('loading');
     setLocationError(null);
 
-    const fallbackToCity = () => {
+    const fallbackToCity = (err) => {
+      if (err) {
+        console.warn('[géoloc] échec getCurrentPosition — code:', err.code, 'message:', err.message);
+      } else {
+        console.warn('[géoloc] navigator.geolocation indisponible dans ce navigateur/contexte.');
+      }
       setLocating(false);
+      setGeoStatus('error');
       setUserCoords(null);
       if (!userCity) {
+        console.warn('[géoloc] pas de ville de profil non plus -> repli impossible, ouverture du profil.');
         setLocationError(t('toast.positionUnavailable'));
         showToast(t('toast.addCityFirst'));
         openProfile();
         return;
       }
+      console.log('[géoloc] repli sur la ville de profil :', userCity);
       setNearMeActive(true);
       setLocationError(t('toast.positionUnavailable'));
       window.storage.set('rezo-near-me-active', 'true', false).catch(() => {});
     };
 
     if (!navigator.geolocation) {
-      fallbackToCity();
+      fallbackToCity(null);
       return;
     }
+    console.log('[géoloc] appel de navigator.geolocation.getCurrentPosition (maximumAge: 0, requête fraîche forcée)...');
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        console.log('[géoloc] succès réel — coords:', coords, 'précision (m):', pos.coords.accuracy);
         setUserCoords(coords);
+        setGeoStatus('success');
         setNearMeActive(true);
         setLocating(false);
         setLocationError(null);
@@ -1730,8 +1753,9 @@ export default function RezoApp() {
           // best effort
         }
         showToast(t('toast.nearMeActivatedGPS'));
+        console.log('[géoloc] geoStatus="success", bouton vert, section "Trié par ta position" active.');
       },
-      fallbackToCity,
+      (err) => fallbackToCity(err),
       // maximumAge: 0 force une lecture GPS fraîche à chaque activation, jamais une position mise
       // en cache par le navigateur/l'OS depuis une activation précédente.
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
@@ -1739,7 +1763,9 @@ export default function RezoApp() {
   };
 
   const disableNearMe = async () => {
+    console.log('[géoloc] désactivation manuelle de "Activités proches de moi".');
     setNearMeActive(false);
+    setGeoStatus('idle');
     setUserCoords(null);
     setLocationError(null);
     try {
@@ -3411,16 +3437,20 @@ export default function RezoApp() {
   })).filter((g) => g.items.length > 0);
 
   // "Activités proches de moi" (voir activateNearMe) : la position GPS fraîchement récupérée est la
-  // source principale dès qu'elle est disponible (_distance calculée pour toute rencontre
-  // géolocalisée, peu importe la ville) ; la ville déclarée au profil ne sert plus que de filet de
-  // sécurité quand la géolocalisation échoue ou est refusée (correspondance texte sur la zone,
-  // comme avant). Aucun filtrage sur le flux principal : ce groupe s'y ajoute, qui reste intact.
+  // source principale dès qu'elle est disponible (_distance calculée pour TOUTE rencontre
+  // géolocalisée, peu importe la ville ou l'organisateur — y compris Équipe REZO) ; la ville déclarée
+  // au profil ne sert plus que de filet de sécurité quand la géolocalisation échoue ou est refusée
+  // (correspondance texte sur la zone, comme avant). Part de `coreFiltered` (pas `filtered`) pour ne
+  // JAMAIS hériter du rayon manuel de la feuille "Filtres" (matchesLocation/radiusKm, une fonctionnalité
+  // séparée) : le tri proche+bientôt fait le travail de pertinence, pas un filtre dur qui ferait
+  // disparaître une rencontre géolocalisée simplement parce qu'elle est plus loin que 5 km. Aucun
+  // filtrage sur le flux principal : ce groupe s'y ajoute, qui reste intact.
   const nearMeMeetups =
     nearMeActive && !mineOnly
       ? userCoords
-        ? filtered.filter((m) => m.coords).sort(byHorizonThenDistance)
+        ? coreFiltered.filter((m) => m.coords).sort(byHorizonThenDistance)
         : userCity
-          ? filtered.filter((m) => m.zone && m.zone.toLowerCase().includes(userCity.trim().toLowerCase())).sort(byHorizonThenDistance)
+          ? coreFiltered.filter((m) => m.zone && m.zone.toLowerCase().includes(userCity.trim().toLowerCase())).sort(byHorizonThenDistance)
           : []
       : [];
 
@@ -5330,12 +5360,20 @@ export default function RezoApp() {
         </div>
 
         <button
-          className={`geo-btn full ${nearMeActive ? 'active' : ''}`}
+          // Vert "Position activée" strictement sur geoStatus === 'success' — jamais deviné, jamais
+          // affiché avant/pendant la requête ni en cas d'échec, même si le repli ville fonctionne.
+          className={`geo-btn full ${geoStatus === 'success' ? 'active' : ''}`}
           onClick={nearMeActive ? disableNearMe : activateNearMe}
           disabled={locating}
         >
           {locating ? <Loader2 size={13} className="spin" /> : <Navigation size={13} />}
-          {nearMeActive ? t('position.active') : locating ? t('position.locating') : t('position.cta')}
+          {geoStatus === 'success'
+            ? t('position.active')
+            : locating
+              ? t('position.locating')
+              : geoStatus === 'error' && nearMeActive
+                ? t('position.activeCity')
+                : t('position.cta')}
         </button>
       </div>
         {locationError && (
@@ -5348,7 +5386,9 @@ export default function RezoApp() {
         <div className="recommended-wrap near-city-wrap">
           <div className="recommended-title">
             <MapPin size={13} style={{ verticalAlign: '-2px', marginInlineEnd: 5 }} color="var(--live)" />
-            {userCoords ? t('position.nearMeTitle') : t('position.nearCity', { city: userCity })}
+            {/* "Près de {ville}" uniquement en repli (geoStatus === 'error') — jamais de ville nommée
+                quand une vraie position GPS est active. */}
+            {geoStatus === 'success' ? t('position.nearMeTitle') : t('position.nearCity', { city: userCity })}
           </div>
           {nearMeGroups.length > 0 ? (
             // Proche ET bientôt : sous-groupes par horizon temporel (voir nearMeGroups), triés par
@@ -5363,7 +5403,7 @@ export default function RezoApp() {
             ))
           ) : (
             <div className="near-city-empty">
-              {userCoords ? t('position.emptyNearMe') : t('position.emptyCity', { city: userCity })}
+              {geoStatus === 'success' ? t('position.emptyNearMe') : t('position.emptyCity', { city: userCity })}
             </div>
           )}
         </div>
