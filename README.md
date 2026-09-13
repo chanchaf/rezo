@@ -747,6 +747,40 @@ plutôt qu'un système d'amis déclaratif classique — cohérent avec l'esprit
    raccourci vers son profil public (et donc ses prochaines rencontres/le
    suivi si besoin).
 
+## Tableau de bord admin (`/admin`)
+
+Statistiques en lecture seule sur l'ensemble de la plateforme (utilisateurs,
+rencontres, engagement, sécurité, répartition géographique), accessible sur
+`/admin` — jamais un lien visible dans l'app, uniquement par URL directe.
+
+- **Accès** : un champ `isAdmin: true` sur l'entrée du compte dans
+  `kv/accounts[email]` (voir "À propos du stockage des données" ci-dessus —
+  cette app n'a pas de collection `users/{uid}`, donc pas de règle Firestore
+  native possible pour restreindre `/admin` aux seuls admins : le contrôle
+  d'accès est **côté client uniquement**, dans `src/main.jsx`, qui vérifie ce
+  champ avant d'afficher `src/AdminDashboard.jsx` et sinon remet l'URL à `/`
+  silencieusement — sans jamais afficher de page "accès refusé" qui trahirait
+  l'existence de la route). C'est une limite connue, pas une vraie barrière
+  serveur : à traiter avec de vraies règles/claims si des données plus
+  sensibles devaient un jour dépendre de ce statut.
+- **Pour te donner accès (ou à quelqu'un d'autre)** : Firebase Console →
+  Firestore Database → collection `kv` → document `accounts` → éditer le
+  champ `value` (une chaîne JSON) pour ajouter `"isAdmin":true` à l'entrée de
+  l'e-mail concerné.
+- **Calcul des métriques** : entièrement côté client, à partir des deux
+  documents déjà nécessaires (`kv/accounts`, `kv/meetups-list`) — pas de
+  requêtes d'agrégation Firestore (`count()`/`sum()`/`average()`), qui ne
+  s'appliquent qu'à des documents dans une collection et non à des éléments
+  d'un tableau dans un seul document, incompatibles avec ce modèle de
+  données. Rafraîchissement manuel (bouton "Actualiser"), pas de temps réel,
+  pour économiser les lectures.
+- **Limite connue** : le taux de complétion des rencontres (créées vs
+  démarrées) ne distingue pas "annulée" de "jamais démarrée", faute d'un état
+  dédié dans le modèle actuel (`deleteMeetup` est une suppression dure, sans
+  trace conservée).
+- Pas de modération active dans cette première version (accepter/rejeter un
+  signalement, bannir un compte) — uniquement des chiffres en lecture seule.
+
 ## Fonctionnalités actuelles
 
 - Création de compte (e-mail + mot de passe) puis profil obligatoire (voir
